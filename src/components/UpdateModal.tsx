@@ -261,3 +261,4 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
     </AnimatePresence>
   );
 };
+

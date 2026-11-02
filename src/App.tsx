@@ -314,6 +314,31 @@ export function App() {
     return new Set<number>(Object.keys(activeSkins).map(Number));
   }, [activeSkins]);
 
+  // Compute set of champions with active friend skins in P2P lobby
+  const friendActiveChampionIds = useMemo(() => {
+    const set = new Set<number>();
+    for (const peer of p2pState.peers) {
+      for (const mod of peer.activeMods) {
+        set.add(mod.championId);
+      }
+    }
+    return set;
+  }, [p2pState.peers]);
+
+  // Compute map of friend names by champion for rich tooltips
+  const friendActiveNamesByChamp = useMemo(() => {
+    const map: Record<number, string[]> = {};
+    for (const peer of p2pState.peers) {
+      for (const mod of peer.activeMods) {
+        if (!map[mod.championId]) {
+          map[mod.championId] = [];
+        }
+        map[mod.championId].push(`${peer.summonerName} (${mod.skinName})`);
+      }
+    }
+    return map;
+  }, [p2pState.peers]);
+
   // Selected champion object
   const currentChampion = useMemo(() => {
     return champions.find((c) => c.id === selectedChampionId) || champions[0];
@@ -595,6 +620,8 @@ export function App() {
               searchQuery={searchQuery}
               onSearchChange={setSearchQuery}
               activeChampionIds={activeChampionIds}
+              friendActiveChampionIds={friendActiveChampionIds}
+              friendActiveNamesByChamp={friendActiveNamesByChamp}
             />
 
             {/* Zone 3: Main Viewport & Skin Cards */}
@@ -627,12 +654,21 @@ export function App() {
                       </div>
                     </div>
 
-                    {activeChampionIds.has(currentChampion.id) && (
-                      <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#D91B2E]/15 border border-[#D91B2E]/30 text-xs text-[#F43F5E] font-semibold">
-                        <span className="w-2 h-2 rounded-full bg-[#F43F5E] animate-pulse" />
-                        <span>Trang phục đang kích hoạt</span>
-                      </div>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {friendActiveChampionIds.has(currentChampion.id) && (
+                        <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-sky-500/15 border border-sky-500/30 text-xs text-sky-400 font-semibold">
+                          <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse shadow-[0_0_6px_rgba(56,189,248,0.8)]" />
+                          <span>Bạn bè đang mod: {friendActiveNamesByChamp[currentChampion.id]?.join(", ")}</span>
+                        </div>
+                      )}
+
+                      {activeChampionIds.has(currentChampion.id) && (
+                        <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#D91B2E]/15 border border-[#D91B2E]/30 text-xs text-[#F43F5E] font-semibold">
+                          <span className="w-2 h-2 rounded-full bg-[#F43F5E] animate-pulse" />
+                          <span>Trang phục đang kích hoạt</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   {/* Staggered Animated Grid of Authentic LoL Loadscreen Skin Cards */}

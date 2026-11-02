@@ -11,6 +11,8 @@ interface SidebarNavigatorProps {
   searchQuery: string;
   onSearchChange: (query: string) => void;
   activeChampionIds: Set<number>;
+  friendActiveChampionIds?: Set<number>;
+  friendActiveNamesByChamp?: Record<number, string[]>;
 }
 
 const SidebarNavigatorComponent: React.FC<SidebarNavigatorProps> = ({
@@ -20,6 +22,8 @@ const SidebarNavigatorComponent: React.FC<SidebarNavigatorProps> = ({
   searchQuery,
   onSearchChange,
   activeChampionIds,
+  friendActiveChampionIds = new Set(),
+  friendActiveNamesByChamp = {},
 }) => {
   // Filter Out Jade_, Ruby_, Strawberry_, non-standard duplicates & id: -1
   const validChampions = useMemo(() => {
@@ -74,6 +78,8 @@ const SidebarNavigatorComponent: React.FC<SidebarNavigatorProps> = ({
           filteredChampions.map((champ) => {
             const isSelected = selectedChampionId === champ.id;
             const hasInjectedSkin = activeChampionIds.has(champ.id);
+            const hasFriendSkin = friendActiveChampionIds.has(champ.id);
+            const friendNames = friendActiveNamesByChamp[champ.id];
 
             return (
               <button
@@ -119,12 +125,29 @@ const SidebarNavigatorComponent: React.FC<SidebarNavigatorProps> = ({
                   </p>
                 </div>
 
-                {/* Injected Crimson Dot */}
-                {hasInjectedSkin && (
-                  <div
-                    className="shrink-0 w-1.5 h-1.5 rounded-full bg-[#F43F5E] shadow-[0_0_8px_#F43F5E] z-10 mr-0.5"
-                    title="Có trang phục đang kích hoạt"
-                  />
+                {/* Status Dots (Local Crimson & Friend Sky Blue) */}
+                {(hasInjectedSkin || hasFriendSkin) && (
+                  <div className="shrink-0 flex items-center gap-1 z-10 mr-0.5">
+                    {/* Local Injected Crimson Dot */}
+                    {hasInjectedSkin && (
+                      <div
+                        className="w-1.5 h-1.5 rounded-full bg-[#F43F5E] shadow-[0_0_8px_#F43F5E]"
+                        title="Bạn đang kích hoạt trang phục tướng này"
+                      />
+                    )}
+
+                    {/* Friend Injected Sky Blue Dot */}
+                    {hasFriendSkin && (
+                      <div
+                        className="w-1.5 h-1.5 rounded-full bg-sky-400 shadow-[0_0_8px_rgba(56,189,248,0.9)] animate-pulse"
+                        title={
+                          friendNames && friendNames.length > 0
+                            ? `Bạn bè đang chọn: ${friendNames.join(", ")}`
+                            : "Bạn bè trong phòng đang chọn trang phục tướng này"
+                        }
+                      />
+                    )}
+                  </div>
                 )}
               </button>
             );
