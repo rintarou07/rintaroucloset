@@ -137,11 +137,17 @@ impl UpdaterManager {
         }
 
         let total_size = response.content_length().unwrap_or(0);
-        let temp_filename = "update_new.exe";
-        let temp_path = PathBuf::from(temp_filename);
+        let current_exe = std::env::current_exe()
+            .map_err(|e| format!("Lỗi xác định file exe: {}", e))?;
+        let exe_dir = current_exe
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .to_path_buf();
+
+        let temp_path = exe_dir.join("update_new.exe");
 
         let mut file = fs::File::create(&temp_path)
-            .map_err(|e| format!("Không thể tạo file tạm {}: {}", temp_filename, e))?;
+            .map_err(|e| format!("Không thể tạo file tạm: {}", e))?;
 
         let mut downloaded: u64 = 0;
         let mut stream = response.bytes_stream();
@@ -186,23 +192,58 @@ impl UpdaterManager {
             },
         );
 
-        // Create detached Windows batch updater script
+        // Create detached Windows batch updater script with retry loop and unlock rename
         let batch_content = r#"@echo off
 chcp 65001 >nul
-echo Dang cap nhat Rintarou Closet len ban moi nhat...
-timeout /t 2 /nobreak >nul
+cd /d "%~dp0"
+echo Dang cap nhat Rintarou Closet len phien ban moi nhat...
 
-if exist "update_new.exe" (
-    copy /y "update_new.exe" "Rintarou Closet.exe" >nul
-    copy /y "update_new.exe" "hextech-skin-client.exe" >nul
-    del /f /q "update_new.exe" >nul
+:: Wait for parent process to exit
+timeout /t 1 /nobreak >nul
+
+:: Terminate any hanging client processes or webview renderers
+taskkill /F /IM "Rintarou Closet.exe" /T >nul 2>&1
+taskkill /F /IM "hextech-skin-client.exe" /T >nul 2>&1
+
+set ATTEMPTS=0
+
+:retry_loop
+set /a ATTEMPTS+=1
+
+:: Rename existing exe if locked (Windows permits renaming locked running executables)
+if exist "Rintarou Closet.exe" (
+    move /y "Rintarou Closet.exe" "Rintarou Closet.exe.old" >nul 2>&1
+)
+if exist "hextech-skin-client.exe" (
+    move /y "hextech-skin-client.exe" "hextech-skin-client.exe.old" >nul 2>&1
 )
 
+:: Copy update file over target files
+copy /y "update_new.exe" "Rintarou Closet.exe" >nul 2>&1
+set RES1=%ERRORLEVEL%
+copy /y "update_new.exe" "hextech-skin-client.exe" >nul 2>&1
+set RES2=%ERRORLEVEL%
+
+if %RES1% neq 0 (
+    if %ATTEMPTS% lss 25 (
+        timeout /t 1 /nobreak >nul
+        goto retry_loop
+    )
+)
+
+:: Clean up temporary files
+del /f /q "update_new.exe" >nul 2>&1
+del /f /q "Rintarou Closet.exe.old" >nul 2>&1
+del /f /q "hextech-skin-client.exe.old" >nul 2>&1
+
+:: Start the newly updated executable
 start "" "Rintarou Closet.exe"
+
+:: Delete this batch script
 (goto) 2>nul & del "%~f0"
 "#;
 
-        let script_path = PathBuf::from("apply_update.bat");
+        let script_path = exe_dir.join("apply_update.bat");
         fs::write(&script_path, batch_content)
             .map_err(|e| format!("Không thể tạo script cập nhật: {}", e))?;
 
@@ -213,6 +254,7 @@ start "" "Rintarou Closet.exe"
             const CREATE_NO_WINDOW: u32 = 0x08000000;
             let _ = std::process::Command::new("cmd")
                 .args(["/C", "apply_update.bat"])
+                .current_dir(&exe_dir)
                 .creation_flags(CREATE_NO_WINDOW)
                 .spawn();
         }

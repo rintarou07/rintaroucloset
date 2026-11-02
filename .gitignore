@@ -22,6 +22,8 @@ data_portable/
 *.exe
 !releases/
 !releases/*.exe
+*.old
+apply_update.bat
 *.dll
 *.pdb
 *.node
