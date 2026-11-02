@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Production & Build outputs
+dist/
+dist-ssr/
+build/
+target/
+src-tauri/target/
+src-tauri/target_check/
+
+# Local User Data, Caches & Config (Preserve user privacy and local machine paths)
+data/
+data-test/
+data_portable/
+*.log
+
+# Large Binaries and Archives
+*.zip
+*.exe
+*.dll
+*.pdb
+*.node
+
+# System & Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.gemini/
+scratch/

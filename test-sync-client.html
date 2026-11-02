@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html lang="vi" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LoL Skin Sync - Client Test GUI</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            hextech: {
+              bg: '#0F1012',
+              card: '#161719',
+              border: '#2E3134',
+              gold: '#C89B3C',
+              cyan: '#0AC8B9',
+              red: '#D91B2E',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* Custom scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #121315; }
+    ::-webkit-scrollbar-thumb { background: #2A2D30; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3E4246; }
+    @keyframes pulse-slow { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .animate-pulse-slow { animation: pulse-slow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+  </style>
+</head>
+<body class="bg-[#0D0E10] text-[#E3E3E3] font-mono min-h-screen p-4 sm:p-6 select-none">
+  <div class="max-w-6xl mx-auto space-y-5">
+    
+    <!-- 1. Header Bar -->
+    <header class="bg-[#161719] border border-[#2E3134] rounded-2xl p-4 sm:p-5 flex flex-wrap items-center justify-between gap-4 shadow-xl">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-sky-500/10 border border-sky-500/30 flex items-center justify-center text-sky-400 font-bold text-lg shadow-[0_0_12px_rgba(56,189,248,0.3)]">
+          🧪
+        </div>
+        <div>
+          <h1 class="text-base sm:text-lg font-bold text-white tracking-wide flex items-center gap-2">
+            CLIENT TEST ĐỒNG BỘ ONLINE (MOCK FRIEND)
+          </h1>
+          <p class="text-xs text-zinc-400">
+            Giả lập 1 người bạn trong phòng để kiểm tra tính năng đồng bộ thời gian thực & nhường skin
+          </p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2.5">
+        <div id="statusBadge" class="flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold bg-rose-500/10 border-rose-500/30 text-rose-400">
+          <span class="w-2 h-2 rounded-full bg-rose-500"></span>
+          <span id="statusText">CHƯA KẾT NỐI</span>
+        </div>
+        <div id="pingBadge" class="flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-semibold bg-[#222427] border-white/10 text-zinc-400">
+          <span>Ping:</span>
+          <span id="pingText" class="text-white font-bold">--- ms</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- 2. Connection Settings & Identity -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+      <!-- Config Form Card -->
+      <div class="bg-[#161719] border border-[#2E3134] rounded-2xl p-4 space-y-3.5 shadow-lg">
+        <h2 class="text-xs font-bold text-amber-400 tracking-wider uppercase flex items-center gap-1.5">
+          <span>⚙️</span> Cấu hình kết nối & Giả lập người chơi
+        </h2>
+
+        <div>
+          <label class="text-[11px] text-zinc-400 block mb-1">Địa chỉ Cloudflare Worker:</label>
+          <input id="serverUrl" type="url" value="https://rintaroucloset.froementertain.workers.dev" 
+                 class="w-full px-3 py-1.5 rounded-lg bg-[#1F2124] border border-[#3A3D40] text-xs text-white focus:outline-none focus:border-sky-400 font-mono">
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="text-[11px] text-zinc-400 block mb-1">Tên phòng:</label>
+            <input id="roomName" type="text" value="default" 
+                   class="w-full px-3 py-1.5 rounded-lg bg-[#1F2124] border border-[#3A3D40] text-xs text-amber-400 font-bold focus:outline-none focus:border-sky-400">
+          </div>
+          <div>
+            <label class="text-[11px] text-zinc-400 block mb-1">Tên giả lập (Peer):</label>
+            <div class="flex gap-1">
+              <input id="summonerName" type="text" value="Faker #T1" 
+                     class="w-full px-2.5 py-1.5 rounded-lg bg-[#1F2124] border border-[#3A3D40] text-xs text-white font-bold focus:outline-none focus:border-sky-400">
+              <button onclick="rollSummonerName()" title="Đổi tên ngẫu nhiên" 
+                      class="px-2 py-1 bg-[#25282B] hover:bg-[#32363A] border border-white/10 rounded-lg text-xs cursor-pointer">🎲</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2 pt-1 border-t border-white/5">
+          <button id="toggleLoopBtn" onclick="toggleHeartbeatLoop()" 
+                  class="flex-1 py-2 px-3 rounded-xl bg-sky-500 hover:bg-sky-400 text-black text-xs font-bold transition-all shadow-[0_0_12px_rgba(56,189,248,0.4)] cursor-pointer flex items-center justify-center gap-1.5">
+            <span id="loopDot" class="w-2 h-2 rounded-full bg-black"></span>
+            <span id="loopBtnText">Bật Đồng Bộ (Loop 2.5s)</span>
+          </button>
+          <button onclick="manualSyncNow()" 
+                  class="py-2 px-2.5 rounded-xl bg-[#25282B] hover:bg-[#32363A] border border-white/10 text-xs font-semibold text-sky-400 transition-colors cursor-pointer flex items-center gap-1" title="Làm mới danh sách ngay">
+            <span>🔄</span> <span>Làm Mới</span>
+          </button>
+          <button onclick="testPingOnly()" 
+                  class="py-2 px-3 rounded-xl bg-[#25282B] hover:bg-[#32363A] border border-white/10 text-xs font-semibold text-zinc-200 transition-colors cursor-pointer">
+            Test Ping
+          </button>
+        </div>
+
+        <!-- Inject Simulator -->
+        <div class="p-2.5 rounded-xl bg-[#121315] border border-white/5 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="text-xs">Trạng thái Game:</span>
+            <span id="injectedBadge" class="text-[10px] font-bold px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-white/5">CHƯA INJECT</span>
+          </div>
+          <button onclick="toggleInjectedState()" 
+                  class="text-[11px] px-2.5 py-1 rounded-lg bg-[#2A2D30] hover:bg-[#383C40] text-white border border-white/10 cursor-pointer">
+            Đổi Trạng Thái
+          </button>
+        </div>
+      </div>
+
+      <!-- Active Skins Setup Card -->
+      <div class="lg:col-span-2 bg-[#161719] border border-[#2E3134] rounded-2xl p-4 space-y-3.5 shadow-lg flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <h2 class="text-xs font-bold text-sky-400 tracking-wider uppercase flex items-center gap-1.5">
+              <span>👕</span> Trang phục đang chọn của bạn (Mock Peer)
+            </h2>
+            <button onclick="clearAllMySkins()" class="text-[10px] text-rose-400 hover:underline cursor-pointer">
+              Xoá tất cả skin
+            </button>
+          </div>
+
+          <!-- Quick 1-click Preset Picks -->
+          <div class="space-y-1.5 mb-3">
+            <span class="text-[10px] text-zinc-400 block font-semibold">Chọn nhanh các tướng phổ biến để test:</span>
+            <div class="flex flex-wrap gap-1.5">
+              <button onclick="pickPreset(103, 103014, 'K/DA ALL OUT Ahri')" class="px-2.5 py-1 rounded-lg bg-[#1F2124] hover:bg-[#2A2D31] border border-white/10 text-[11px] text-zinc-200 cursor-pointer hover:border-sky-400 transition-colors">
+                🦊 Ahri (K/DA)
+              </button>
+              <button onclick="pickPreset(157, 157009, 'Ma Kiếm Yasuo')" class="px-2.5 py-1 rounded-lg bg-[#1F2124] hover:bg-[#2A2D31] border border-white/10 text-[11px] text-zinc-200 cursor-pointer hover:border-sky-400 transition-colors">
+                ⚔️ Yasuo (Ma Kiếm)
+              </button>
+              <button onclick="pickPreset(64, 64011, 'Lee Sin Ma Sứ')" class="px-2.5 py-1 rounded-lg bg-[#1F2124] hover:bg-[#2A2D31] border border-white/10 text-[11px] text-zinc-200 cursor-pointer hover:border-sky-400 transition-colors">
+                👊 Lee Sin (Ma Sứ)
+              </button>
+              <button onclick="pickPreset(238, 238010, 'Zed Tử Thần Không Gian')" class="px-2.5 py-1 rounded-lg bg-[#1F2124] hover:bg-[#2A2D31] border border-white/10 text-[11px] text-zinc-200 cursor-pointer hover:border-sky-400 transition-colors">
+                🥷 Zed (Tử Thần)
+              </button>
+              <button onclick="pickPreset(266, 266001, 'Aatrox Huyết Nguyệt')" class="px-2.5 py-1 rounded-lg bg-[#1F2124] hover:bg-[#2A2D31] border border-white/10 text-[11px] text-zinc-200 cursor-pointer hover:border-sky-400 transition-colors">
+                🗡️ Aatrox (Huyết Nguyệt)
+              </button>
+              <button onclick="pickPreset(222, 222004, 'Jinx Vệ Binh Tinh Tú')" class="px-2.5 py-1 rounded-lg bg-[#1F2124] hover:bg-[#2A2D31] border border-white/10 text-[11px] text-zinc-200 cursor-pointer hover:border-sky-400 transition-colors">
+                🚀 Jinx (Vệ Binh)
+              </button>
+            </div>
+          </div>
+
+          <!-- Highlight: Auto Conflict Trigger Button -->
+          <div class="p-3 rounded-xl bg-gradient-to-r from-rose-950/40 via-amber-950/30 to-rose-950/40 border border-rose-500/40 mb-3">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <span class="text-xs font-bold text-rose-300 flex items-center gap-1.5">
+                  🔥 TEST TRÙNG TƯỚNG (CONFLICT TRIGGER)
+                </span>
+                <p class="text-[10px] text-zinc-300 mt-0.5">
+                  Tự động tìm tướng người dùng trên app đang chọn và pick ngay lập tức để kích hoạt modal Nhường skin trên app!
+                </p>
+              </div>
+              <button onclick="triggerDuplicateWithApp()" 
+                      class="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-[0_0_14px_rgba(225,29,72,0.6)] transition-all cursor-pointer shrink-0">
+                Pick Trùng Tướng Với App
+              </button>
+            </div>
+          </div>
+
+          <!-- Active Skins Display Strip -->
+          <div id="myActiveSkinsList" class="flex flex-wrap gap-2 min-h-[50px] p-2.5 rounded-xl bg-[#121315] border border-white/5 items-center">
+            <span class="text-xs text-zinc-500 italic">Chưa chọn trang phục nào (Bấm các nút chọn nhanh ở trên).</span>
+          </div>
+        </div>
+
+        <!-- Custom Pick Row -->
+        <div class="pt-2 border-t border-white/5 flex flex-wrap items-center gap-2">
+          <input id="customChampId" type="number" placeholder="ID Tướng (vd: 103)" class="w-32 px-2.5 py-1.5 rounded-lg bg-[#1F2124] border border-[#3A3D40] text-xs text-white">
+          <input id="customSkinId" type="number" placeholder="ID Skin (vd: 103001)" class="w-36 px-2.5 py-1.5 rounded-lg bg-[#1F2124] border border-[#3A3D40] text-xs text-white">
+          <input id="customSkinName" type="text" placeholder="Tên Skin (vd: Ahri Bóng Đêm)" class="flex-1 min-w-[140px] px-2.5 py-1.5 rounded-lg bg-[#1F2124] border border-[#3A3D40] text-xs text-white">
+          <button onclick="addCustomSkin()" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold cursor-pointer">
+            + Thêm Skin
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. Conflict Resolution Control Banner (Appears when conflict exists) -->
+    <div id="conflictAlertBanner" class="hidden p-4 rounded-2xl bg-amber-500/10 border border-amber-500/40 text-amber-200 shadow-xl space-y-2">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2 text-sm font-bold text-amber-400">
+          <span>⚠️</span>
+          <span>PHÁT HIỆN XUNG ĐỘT TƯỚNG (TRÙNG TƯỚNG TRONG PHÒNG)</span>
+        </div>
+        <span class="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30">
+          Cần giải quyết
+        </span>
+      </div>
+      <p id="conflictDescText" class="text-xs text-zinc-300">
+        Bạn và bạn bè đang cùng chọn một tướng! Hãy kiểm tra app chính xem modal nhường skin có hiện lên không.
+      </p>
+      <div class="flex items-center gap-3 pt-1">
+        <button onclick="sendConflictAction('yield')" 
+                class="px-4 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs transition-colors cursor-pointer shadow-[0_0_10px_rgba(245,158,11,0.4)]">
+          Tôi Nhường Bạn (Yield)
+        </button>
+        <button onclick="sendConflictAction('keep')" 
+                class="px-4 py-1.5 rounded-xl bg-[#2A2D30] hover:bg-[#35393D] text-white border border-white/10 font-bold text-xs transition-colors cursor-pointer">
+          Tôi Giữ Skin (Keep)
+        </button>
+      </div>
+    </div>
+
+    <!-- 4. Room Members & Peer State (Live Inspector) -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <!-- Peers in Room -->
+      <div class="bg-[#161719] border border-[#2E3134] rounded-2xl p-4 space-y-3 shadow-lg">
+        <div class="flex items-center justify-between">
+          <h2 class="text-xs font-bold text-emerald-400 tracking-wider uppercase flex items-center gap-1.5">
+            <span>👥</span> Thành viên trong phòng (<span id="peerCountText">0</span>)
+          </h2>
+          <span class="text-[10px] text-zinc-400">Tự động cập nhật mỗi 2.5s</span>
+        </div>
+
+        <div id="roomPeersContainer" class="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+          <div class="p-6 text-center text-xs text-zinc-500 italic">
+            Chưa có người chơi nào. Bấm "Bật Đồng Bộ" để kết nối vào phòng.
+          </div>
+        </div>
+      </div>
+
+      <!-- Real-time Activity Log -->
+      <div class="bg-[#161719] border border-[#2E3134] rounded-2xl p-4 space-y-3 shadow-lg flex flex-col">
+        <div class="flex items-center justify-between">
+          <h2 class="text-xs font-bold text-zinc-300 tracking-wider uppercase flex items-center gap-1.5">
+            <span>📜</span> Nhật ký hoạt động mạng (Event Log)
+          </h2>
+          <button onclick="clearLogs()" class="text-[10px] text-zinc-400 hover:text-white cursor-pointer">
+            Xoá log
+          </button>
+        </div>
+
+        <div id="logConsole" class="flex-1 min-h-[260px] max-h-[320px] overflow-y-auto bg-[#0E0F11] border border-white/5 rounded-xl p-3 text-[11px] font-mono space-y-1.5 text-zinc-400">
+          <div class="text-zinc-600 italic">Sẵn sàng kết nối...</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // State of Mock Peer
+    let isLoopRunning = false;
+    let loopTimer = null;
+    let timerWorker = null;
+    let heartbeatCount = 0;
+    let lastKnownPeersSig = "";
+    let isInjected = false;
+    let myActiveSkins = {};
+    let latestRoomData = null;
+    let activeConflict = null;
+
+    // Initialize Web Worker timer to bypass background tab throttling
+    try {
+      const workerScript = `
+        let timer = null;
+        self.onmessage = function(e) {
+          if (e.data === 'start') {
+            if (timer) clearInterval(timer);
+            timer = setInterval(() => self.postMessage('tick'), 2500);
+          } else if (e.data === 'stop') {
+            if (timer) clearInterval(timer);
+            timer = null;
+          }
+        };
+      `;
+      const blob = new Blob([workerScript], { type: 'application/javascript' });
+      timerWorker = new Worker(URL.createObjectURL(blob));
+      timerWorker.onmessage = function(e) {
+        if (e.data === 'tick' && isLoopRunning) {
+          sendHeartbeat();
+        }
+      };
+    } catch (err) {
+      console.warn("Web Worker timer not available, using setInterval fallback:", err);
+    }
+
+    // Preset champions catalog
+    const champNames = {
+      1: "Annie", 103: "Ahri", 157: "Yasuo", 64: "Lee Sin", 238: "Zed", 
+      266: "Aatrox", 222: "Jinx", 51: "Caitlyn", 81: "Ezreal", 99: "Lux"
+    };
+
+    // Random Mock Summoner Names
+    const mockNames = [
+      "Faker #T1", "Chovy #GEN", "Keria #T1", "Deft #DK", 
+      "ShowMaker #DK", "Gumayusi #T1", "Zeus #HLE", "TheShy #WBG", 
+      "Caps #G2", "Ruler #JDG", "Viper #HLE", "BeryL #KT"
+    ];
+
+    function rollSummonerName() {
+      const idx = Math.floor(Math.random() * mockNames.length);
+      document.getElementById('summonerName').value = mockNames[idx];
+      addLog('info', `Đã đổi tên giả lập thành: ${mockNames[idx]}`);
+    }
+
+    function toggleInjectedState() {
+      isInjected = !isInjected;
+      const b = document.getElementById('injectedBadge');
+      if (isInjected) {
+        b.className = "text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
+        b.textContent = "INJECTED (TRONG GAME)";
+      } else {
+        b.className = "text-[10px] font-bold px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-white/5";
+        b.textContent = "CHƯA INJECT";
+      }
+      addLog('info', `Trạng thái Inject game đổi thành: ${isInjected ? 'BẬT' : 'TẮT'}`);
+      if (isLoopRunning) sendHeartbeat();
+    }
+
+    function pickPreset(champId, skinId, skinName) {
+      myActiveSkins[champId] = {
+        champion_id: champId,
+        skin_id: skinId,
+        skin_name: skinName,
+        chroma_id: null,
+        skin_type: 'official'
+      };
+      renderMySkins();
+      addLog('success', `Đã chọn: ${skinName} (Tướng ${champId})`);
+      if (isLoopRunning) sendHeartbeat();
+    }
+
+    function addCustomSkin() {
+      const cId = parseInt(document.getElementById('customChampId').value);
+      const sId = parseInt(document.getElementById('customSkinId').value);
+      const sName = document.getElementById('customSkinName').value.trim() || `Skin ${sId}`;
+
+      if (!cId || !sId) {
+        alert("Vui lòng nhập ID tướng và ID skin!");
+        return;
+      }
+
+      myActiveSkins[cId] = {
+        champion_id: cId,
+        skin_id: sId,
+        skin_name: sName,
+        chroma_id: null,
+        skin_type: 'official'
+      };
+      renderMySkins();
+      addLog('success', `Đã thêm custom skin: ${sName} (ID: ${sId})`);
+      if (isLoopRunning) sendHeartbeat();
+    }
+
+    function removeSkin(champId) {
+      delete myActiveSkins[champId];
+      renderMySkins();
+      addLog('info', `Đã gỡ bỏ skin tướng ID ${champId}`);
+      if (isLoopRunning) sendHeartbeat();
+    }
+
+    function clearAllMySkins() {
+      myActiveSkins = {};
+      renderMySkins();
+      addLog('info', "Đã xoá toàn bộ danh sách skin của mock client");
+      if (isLoopRunning) sendHeartbeat();
+    }
+
+    function renderMySkins() {
+      const container = document.getElementById('myActiveSkinsList');
+      const entries = Object.entries(myActiveSkins);
+
+      if (entries.length === 0) {
+        container.innerHTML = `<span class="text-xs text-zinc-500 italic">Chưa chọn trang phục nào (Bấm các nút chọn nhanh ở trên).</span>`;
+        return;
+      }
+
+      container.innerHTML = entries.map(([cId, s]) => `
+        <div class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[#181A1D] border border-sky-500/30 text-xs">
+          <span class="w-1.5 h-1.5 rounded-full bg-sky-400"></span>
+          <div class="leading-tight">
+            <span class="font-bold text-white block">${s.skin_name}</span>
+            <span class="text-[10px] text-zinc-400">Tướng: ${champNames[cId] || cId} (ID: ${s.skin_id})</span>
+          </div>
+          <button onclick="removeSkin(${cId})" class="ml-1 text-zinc-500 hover:text-rose-400 cursor-pointer font-bold">×</button>
+        </div>
+      `).join('');
+    }
+
+    // Toggle heartbeat loop
+    function toggleHeartbeatLoop() {
+      isLoopRunning = !isLoopRunning;
+      const btn = document.getElementById('toggleLoopBtn');
+      const btnText = document.getElementById('loopBtnText');
+      const dot = document.getElementById('loopDot');
+
+      if (isLoopRunning) {
+        btn.className = "flex-1 py-2 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-bold transition-all shadow-[0_0_12px_rgba(16,185,129,0.4)] cursor-pointer flex items-center justify-center gap-1.5";
+        btnText.textContent = "Đang Đồng Bộ (Bấm để Dừng)";
+        dot.className = "w-2 h-2 rounded-full bg-black animate-ping";
+        sendHeartbeat();
+        if (timerWorker) {
+          timerWorker.postMessage('start');
+        } else {
+          loopTimer = setInterval(sendHeartbeat, 2500);
+        }
+        addLog('success', `[Đồng bộ] Đã BẬT nhịp tim (2.5s) - Chạy ngầm liên tục qua Web Worker.`);
+      } else {
+        if (timerWorker) {
+          timerWorker.postMessage('stop');
+        }
+        if (loopTimer) clearInterval(loopTimer);
+        loopTimer = null;
+        btn.className = "flex-1 py-2 px-3 rounded-xl bg-sky-500 hover:bg-sky-400 text-black text-xs font-bold transition-all shadow-[0_0_12px_rgba(56,189,248,0.4)] cursor-pointer flex items-center justify-center gap-1.5";
+        btnText.textContent = "Bật Đồng Bộ (Loop 2.5s)";
+        dot.className = "w-2 h-2 rounded-full bg-black";
+        updateConnectionStatus(false, null);
+        addLog('info', `[Đồng bộ] Đã TẮT nhịp tim.`);
+      }
+    }
+
+    async function manualSyncNow() {
+      addLog('info', `[Thủ công] Đang làm mới nhịp tim ngay lập tức...`);
+      await sendHeartbeat();
+    }
+
+    async function testPingOnly() {
+      const serverUrl = document.getElementById('serverUrl').value.trim().replace(/\/+$/, '');
+      if (!serverUrl) return;
+
+      const t0 = Date.now();
+      addLog('info', `Đang kiểm tra kết nối tới ${serverUrl}/api/ping...`);
+
+      try {
+        const resp = await fetch(`${serverUrl}/api/ping?_t=${Date.now()}`, { method: 'GET' });
+        const elapsed = Date.now() - t0;
+        if (resp.ok) {
+          const json = await resp.json();
+          updateConnectionStatus(true, elapsed);
+          addLog('success', `Ping OK: ${elapsed} ms - Dịch vụ: ${json.service || 'Online'}`);
+        } else {
+          updateConnectionStatus(false, elapsed);
+          addLog('error', `Server phản hồi lỗi HTTP ${resp.status}`);
+        }
+      } catch (err) {
+        updateConnectionStatus(false, null);
+        addLog('error', `Lỗi kết nối Ping: ${err.message}`);
+      }
+    }
+
+    async function sendHeartbeat() {
+      const serverUrl = document.getElementById('serverUrl').value.trim().replace(/\/+$/, '');
+      const room = document.getElementById('roomName').value.trim() || 'default';
+      const summonerName = document.getElementById('summonerName').value.trim() || 'Faker #T1';
+
+      if (!serverUrl) return;
+
+      const payload = {
+        type: 'heartbeat',
+        room,
+        summoner_name: summonerName,
+        summoner_icon_url: "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/profile-icons/6038.jpg",
+        active_skins: myActiveSkins,
+        is_injected: isInjected,
+        last_seen: Date.now()
+      };
+
+      // Broadcast to global room relay in background so all clients see this peer immediately
+      const relayTopic = `lol-sync-room-${encodeURIComponent(room)}`;
+      fetch(`https://ntfy.sh/${relayTopic}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).catch(() => {});
+
+      const t0 = Date.now();
+
+      try {
+        const resp = await fetch(`${serverUrl}/api/heartbeat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        const elapsed = Date.now() - t0;
+
+        if (!resp.ok) {
+          updateConnectionStatus(false, elapsed);
+          addLog('error', `Heartbeat lỗi HTTP ${resp.status}`);
+          return;
+        }
+
+        const data = await resp.json();
+        latestRoomData = data;
+        updateConnectionStatus(true, elapsed);
+
+        heartbeatCount++;
+        let allPeers = data.peers || [];
+        let otherPeers = allPeers.filter(p => p.summoner_name !== summonerName);
+
+        // If Cloudflare isolate only has 1 peer, check room relay for peers on other isolates
+        if (otherPeers.length === 0) {
+          try {
+            const relayResp = await fetch(`https://ntfy.sh/${relayTopic}/json?poll=1&since=2m`);
+            if (relayResp.ok) {
+              const text = await relayResp.text();
+              const peerMap = new Map();
+              const now = Date.now();
+              for (const line of text.trim().split('\n')) {
+                try {
+                  const item = JSON.parse(line);
+                  if (item.event === 'message' && item.message) {
+                    const p = JSON.parse(item.message);
+                    if (p.type === 'heartbeat' && p.summoner_name && now - (p.last_seen || 0) < 60000) {
+                      peerMap.set(p.summoner_name, {
+                        summoner_name: p.summoner_name,
+                        summoner_icon_url: p.summoner_icon_url,
+                        active_skins: p.active_skins || {},
+                        is_injected: Boolean(p.is_injected),
+                        last_seen: p.last_seen
+                      });
+                    } else if (p.type === 'conflict' && p.champion_id) {
+                      data.conflicts = data.conflicts || {};
+                      data.conflicts[p.champion_id] = p;
+                    }
+                  }
+                } catch {}
+              }
+              if (peerMap.size > 0) {
+                allPeers = Array.from(peerMap.values());
+                otherPeers = allPeers.filter(p => p.summoner_name !== summonerName);
+              }
+            }
+          } catch {}
+        }
+
+        const currentSig = otherPeers.map(p => `${p.summoner_name}:${Object.keys(p.active_skins || {}).length}`).sort().join("|");
+
+        if (currentSig !== lastKnownPeersSig) {
+          lastKnownPeersSig = currentSig;
+          if (otherPeers.length > 0) {
+            const names = otherPeers.map(p => p.summoner_name).join(", ");
+            addLog('success', `👥 Nhận diện ${otherPeers.length} bạn bè online: [${names}] (${elapsed}ms)`);
+          } else {
+            addLog('info', `[Nhịp tim #${heartbeatCount}] Đã gửi thành công (${elapsed}ms). Chưa có ai khác trong phòng.`);
+          }
+        } else if (heartbeatCount % 8 === 1) {
+          addLog('info', `[Nhịp tim #${heartbeatCount}] Phòng "${room}": ${allPeers.length} người trực tuyến (${elapsed}ms)`);
+        }
+
+        // Update UI with other peers
+        renderRoomPeers(allPeers, summonerName);
+
+        // Check for conflicts
+        checkConflicts(data.conflicts || {}, allPeers);
+
+      } catch (err) {
+        updateConnectionStatus(false, null);
+        addLog('error', `Heartbeat lỗi: ${err.message}`);
+      }
+    }
+
+    function checkConflicts(conflicts, peers) {
+      activeConflict = null;
+      const myName = document.getElementById('summonerName').value.trim();
+
+      // Look for collision in our active skins against other peers
+      for (const [cIdStr, mySkin] of Object.entries(myActiveSkins)) {
+        const cId = parseInt(cIdStr);
+        for (const peer of peers) {
+          if (peer.summoner_name === myName) continue;
+          const peerSkin = peer.active_skins?.[cIdStr] || peer.active_skins?.[cId];
+          if (peerSkin) {
+            activeConflict = {
+              champion_id: cId,
+              peerSummoner: peer.summoner_name,
+              peerSkinName: peerSkin.skin_name || `Skin ${peerSkin.skin_id}`,
+              mySkinName: mySkin.skin_name
+            };
+            break;
+          }
+        }
+        if (activeConflict) break;
+      }
+
+      const banner = document.getElementById('conflictAlertBanner');
+      const desc = document.getElementById('conflictDescText');
+
+      if (activeConflict) {
+        banner.classList.remove('hidden');
+        desc.textContent = `Bạn và người chơi "${activeConflict.peerSummoner}" đang cùng chọn Tướng ID ${activeConflict.champion_id} (${champNames[activeConflict.champion_id] || ''})!`;
+      } else {
+        banner.classList.add('hidden');
+      }
+    }
+
+    async function sendConflictAction(action) {
+      if (!activeConflict) return;
+      const serverUrl = document.getElementById('serverUrl').value.trim().replace(/\/+$/, '');
+      const room = document.getElementById('roomName').value.trim() || 'default';
+      const myName = document.getElementById('summonerName').value.trim();
+
+      const relayTopic = `lol-sync-room-${encodeURIComponent(room)}`;
+      fetch(`https://ntfy.sh/${relayTopic}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'conflict',
+          room,
+          champion_id: activeConflict.champion_id,
+          from_summoner: myName,
+          target_summoner: activeConflict.peerSummoner,
+          action,
+          timestamp: Date.now()
+        })
+      }).catch(() => {});
+
+      try {
+        const resp = await fetch(`${serverUrl}/api/conflict`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            room,
+            champion_id: activeConflict.champion_id,
+            from_summoner: myName,
+            target_summoner: activeConflict.peerSummoner,
+            action
+          })
+        });
+
+        if (resp.ok) {
+          addLog('success', `Đã gửi quyết định: ${action === 'yield' ? 'NHƯỜNG SKIN' : 'GIỮ SKIN'}`);
+          if (action === 'yield') {
+            delete myActiveSkins[activeConflict.champion_id];
+            renderMySkins();
+          }
+          sendHeartbeat();
+        }
+      } catch (err) {
+        addLog('error', `Lỗi gửi quyết định conflict: ${err.message}`);
+      }
+    }
+
+    // Trigger duplicate with main desktop app user
+    function triggerDuplicateWithApp() {
+      if (!latestRoomData || !latestRoomData.peers) {
+        alert("Chưa nhận được danh sách người chơi từ phòng. Vui lòng bấm 'Bật Đồng Bộ' trước!");
+        return;
+      }
+
+      const myName = document.getElementById('summonerName').value.trim();
+      const otherPeers = latestRoomData.peers.filter(p => p.summoner_name !== myName);
+
+      if (otherPeers.length === 0) {
+        alert("Phòng hiện chưa có ai khác (Hãy mở app Desktop và bật đồng bộ để xuất hiện trong phòng!).");
+        return;
+      }
+
+      // Find first skin chosen by any other peer
+      for (const peer of otherPeers) {
+        const skins = Object.values(peer.active_skins || {});
+        if (skins.length > 0) {
+          const target = skins[0];
+          const champId = parseInt(target.champion_id);
+          myActiveSkins[champId] = {
+            champion_id: champId,
+            skin_id: target.skin_id + 1, // choose a different skin ID for same champ
+            skin_name: `Trùng tướng (${champNames[champId] || champId})`,
+            chroma_id: null,
+            skin_type: 'official'
+          };
+          renderMySkins();
+          addLog('warn', `ĐÃ PICK TRÙNG TƯỚNG ${champNames[champId] || champId} VỚI "${peer.summoner_name}"!`);
+          sendHeartbeat();
+          return;
+        }
+      }
+
+      alert("Người chơi kia trong phòng hiện chưa chọn skin nào. Hãy vào app chọn 1 skin bất kỳ trước!");
+    }
+
+    function renderRoomPeers(peers, myName) {
+      const container = document.getElementById('roomPeersContainer');
+      const countText = document.getElementById('peerCountText');
+      countText.textContent = peers.length;
+
+      if (peers.length === 0) {
+        container.innerHTML = `<div class="p-6 text-center text-xs text-zinc-500 italic">Chưa có người chơi nào trong phòng.</div>`;
+        return;
+      }
+
+      container.innerHTML = peers.map(p => {
+        const isSelf = p.summoner_name === myName;
+        const skinsList = Object.values(p.active_skins || {});
+
+        return `
+          <div class="p-3 rounded-xl ${isSelf ? 'bg-sky-950/20 border border-sky-500/30' : 'bg-[#1D1F22] border border-white/5'} space-y-2">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <img src="${p.summoner_icon_url || 'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/profile-icons/29.jpg'}" 
+                     class="w-7 h-7 rounded-full border border-white/10 object-cover">
+                <div>
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-xs font-bold text-white">${p.summoner_name}</span>
+                    ${isSelf ? '<span class="text-[9px] px-1.5 py-0.2 rounded bg-sky-500/20 text-sky-400 font-bold border border-sky-500/30">BẠN (MOCK)</span>' : '<span class="text-[9px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 font-bold border border-emerald-500/30">APP DESKTOP</span>'}
+                  </div>
+                  <span class="text-[10px] text-zinc-400">Trạng thái: ${p.is_injected ? '<span class="text-emerald-400 font-semibold">ĐÃ INJECT</span>' : '<span class="text-zinc-500">Chưa inject</span>'}</span>
+                </div>
+              </div>
+              <span class="text-[10px] text-zinc-500 font-mono">${skinsList.length} skins</span>
+            </div>
+
+            <!-- Skins chosen by this peer -->
+            <div class="flex flex-wrap gap-1 pt-1 border-t border-white/5">
+              ${skinsList.length === 0 ? '<span class="text-[10px] text-zinc-500 italic">Chưa chọn skin nào.</span>' : ''}
+              ${skinsList.map(s => `
+                <span class="px-2 py-0.5 rounded bg-[#131416] border border-white/5 text-[10px] text-zinc-300">
+                  <strong class="text-amber-400">${champNames[s.champion_id] || `Tướng ${s.champion_id}`}:</strong> ${s.skin_name}
+                </span>
+              `).join('')}
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function updateConnectionStatus(isOnline, pingMs) {
+      const badge = document.getElementById('statusBadge');
+      const text = document.getElementById('statusText');
+      const pingText = document.getElementById('pingText');
+
+      if (isOnline) {
+        badge.className = "flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold bg-emerald-500/10 border-emerald-500/30 text-emerald-400";
+        text.textContent = "ONLINE";
+      } else {
+        badge.className = "flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold bg-rose-500/10 border-rose-500/30 text-rose-400";
+        text.textContent = "OFFLINE";
+      }
+
+      if (pingMs !== null) {
+        pingText.textContent = `${pingMs} ms`;
+        pingText.className = pingMs < 80 ? "text-emerald-400 font-bold" : pingMs < 160 ? "text-amber-400 font-bold" : "text-rose-400 font-bold";
+      } else {
+        pingText.textContent = "--- ms";
+        pingText.className = "text-zinc-400 font-bold";
+      }
+    }
+
+    function addLog(type, msg) {
+      const consoleBox = document.getElementById('logConsole');
+      const d = new Date();
+      const timeStr = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`;
+
+      const colorMap = {
+        info: 'text-zinc-400',
+        success: 'text-emerald-400',
+        warn: 'text-amber-400',
+        error: 'text-rose-400'
+      };
+
+      const line = document.createElement('div');
+      line.className = `leading-relaxed ${colorMap[type] || 'text-zinc-400'}`;
+      line.innerHTML = `<span class="text-zinc-600">[${timeStr}]</span> ${msg}`;
+
+      consoleBox.appendChild(line);
+      consoleBox.scrollTop = consoleBox.scrollHeight;
+    }
+
+    function clearLogs() {
+      document.getElementById('logConsole').innerHTML = '<div class="text-zinc-600 italic">Đã xoá log.</div>';
+    }
+
+    // Initialize with a ping test on load
+    window.addEventListener('DOMContentLoaded', () => {
+      addLog('info', 'Client Test Mock đã khởi động. Sẵn sàng kết nối tới Cloudflare Worker.');
+      testPingOnly();
+    });
+  </script>
+</body>
+</html>
+

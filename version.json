@@ -1,0 +1,15 @@
+{
+  "version": "0.1.1",
+  "min_required_version": "0.1.0",
+  "release_date": "2026-11-02",
+  "title": "Bản cập nhật Rintarou Closet v0.1.1",
+  "changelog": [
+    "Hiển thị chuẩn ảnh đại diện tướng & splash skin của bạn bè trong phòng P2P",
+    "Bỏ hiển thị số thứ tự slot gây nhầm lẫn trong phòng P2P Mesh",
+    "Tính năng Tự Động Cập Nhật (Auto-Updater) 1-Click trực tiếp từ GitHub",
+    "Hỗ trợ cập nhật code, data app, patcher mà không mất cấu hình game riêng",
+    "Tối ưu hóa hiệu năng và kết nối mạng P2P Mesh WebRTC"
+  ],
+  "download_url": "https://github.com/rintarou07/rintaroucloset/releases/latest/download/Rintarou-Closet.exe",
+  "direct_exe_url": "https://github.com/rintarou07/rintaroucloset/releases/latest/download/Rintarou-Closet.exe"
+}

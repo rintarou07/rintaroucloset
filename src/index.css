@@ -1,0 +1,71 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    background-color: #131314;
+    color: #E3E3E3;
+    font-family: 'JetBrains Mono', monospace;
+    user-select: none;
+    -webkit-user-select: none;
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  ::selection {
+    background-color: #D91B2E;
+    color: #FFFFFF;
+  }
+
+  /* Custom Sleek Scrollbar */
+  ::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: #131314;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #282A2C;
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #D91B2E;
+  }
+}
+
+@layer utilities {
+  .hairline-border {
+    border-color: rgba(255, 255, 255, 0.07);
+  }
+
+  .hairline-border-b {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  }
+
+  .hairline-border-r {
+    border-right: 1px solid rgba(255, 255, 255, 0.07);
+  }
+
+  .hairline-border-t {
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
+  }
+
+  .hairline-border-l {
+    border-left: 1px solid rgba(255, 255, 255, 0.07);
+  }
+}
