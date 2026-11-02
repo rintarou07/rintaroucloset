@@ -20,6 +20,8 @@ data_portable/
 # Large Binaries and Archives
 *.zip
 *.exe
+!releases/
+!releases/*.exe
 *.dll
 *.pdb
 *.node
