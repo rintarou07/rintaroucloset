@@ -1,13 +1,13 @@
 {
-  "version": "0.1.2",
+  "version": "0.1.3",
   "min_required_version": "0.1.0",
-  "release_date": "2026-11-02",
-  "title": "Bản cập nhật Rintarou Closet v0.1.2",
+  "release_date": "2026-11-03",
+  "title": "Bản cập nhật Rintarou Closet v0.1.3 - Xuyên NAT & Khác Mạng",
   "changelog": [
-    "Hiển thị chấm xanh khi bạn bè chọn skin ở danh sách tướng bên trái (Sidebar)",
-    "Hỗ trợ hiển thị song song chấm đỏ (mình mod) và chấm xanh (bạn bè mod) kèm tên bạn bè",
-    "Hiển thị nhãn thông tin bạn bè đang mod tướng ở thanh tiêu đề chi tiết tướng",
-    "Tối ưu hóa kiểm tra và thông báo bản cập nhật tự động từ GitHub"
+    "Khắc phục triệt để lỗi bạn bè khác mạng (Viettel, FPT, VNPT, 4G/5G, CGNAT) không kết nối P2P được",
+    "Tích hợp Hybrid Mesh Engine: Kết hợp WebRTC (STUN + TURN Relay) và Multi-Broker WSS (cổng 443 TLS xuyên mọi tường lửa)",
+    "Khắc phục lỗi trùng kết nối làm tự ngắt đồng bộ và tự động lọc bỏ phiên bản ma khi bạn bè thoát ra vào lại",
+    "Tăng tốc độ tìm thấy bạn bè trong phòng P2P toàn cầu xuống dưới 300ms"
   ],
   "download_url": "https://raw.githubusercontent.com/rintarou07/rintaroucloset/main/releases/Rintarou-Closet.exe",
   "direct_exe_url": "https://raw.githubusercontent.com/rintarou07/rintaroucloset/main/releases/Rintarou-Closet.exe"

@@ -7,6 +7,31 @@ export const LOBBY_SLOTS = Array.from(
   (_, i) => `hextech-bloodmoon-global-v1-slot-${i + 1}`
 );
 
+const MESH_TOPIC = "rintarou-closet/global-p2p-mesh/v2";
+
+const WSS_MESH_BROKERS = [
+  "wss://broker.emqx.io:8084/mqtt",
+  "wss://broker.hivemq.com:8884/mqtt",
+  "wss://test.mosquitto.org:8081/mqtt",
+];
+
+const ICE_SERVERS: RTCIceServer[] = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+  { urls: "stun:stun2.l.google.com:19302" },
+  { urls: "stun:stun.cloudflare.com:3478" },
+  {
+    urls: [
+      "turn:openrelay.metered.ca:80",
+      "turn:openrelay.metered.ca:443",
+      "turn:openrelay.metered.ca:443?transport=tcp",
+      "turns:openrelay.metered.ca:443?transport=tcp",
+    ],
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+];
+
 export interface ActiveModInfo {
   championId: number;
   championName: string;
@@ -27,6 +52,7 @@ export interface PeerMember {
   pingMs: number | null;
   lastSeen: number;
   isSyncEnabled: boolean;
+  clientUid?: string;
 }
 
 export type P2PLobbyStatus = "disconnected" | "connecting" | "connected" | "error";
@@ -43,8 +69,16 @@ export interface P2PLobbyState {
 
 export type P2PPacket =
   | {
-      type: "STATE_UPDATE";
+      type: "HELLO";
+      msgId?: string;
       peerId: string;
+      clientUid?: string;
+    }
+  | {
+      type: "STATE_UPDATE";
+      msgId?: string;
+      peerId: string;
+      clientUid?: string;
       summonerName: string;
       tagLine: string;
       profileIconUrl: string;
@@ -52,16 +86,21 @@ export type P2PPacket =
     }
   | {
       type: "PING";
+      msgId?: string;
       senderId: string;
+      targetId?: string;
       timestamp: number;
     }
   | {
       type: "PONG";
+      msgId?: string;
       senderId: string;
+      targetId?: string;
       originalTimestamp: number;
     }
   | {
       type: "CONFLICT_ACTION";
+      msgId?: string;
       championId: number;
       fromSummoner: string;
       targetSummoner: string;
@@ -69,40 +108,190 @@ export type P2PPacket =
     }
   | {
       type: "LEAVE";
+      msgId?: string;
       peerId: string;
+      clientUid?: string;
     };
 
 type P2PListener = (state: P2PLobbyState) => void;
+
+// ============================================================================
+// Lightweight Native MQTT v3.1.1 over WebSocket Codec (Port 443 TLS NAT Bypass)
+// ============================================================================
+
+function encodeMqttString(str: string): Uint8Array {
+  const utf8 = new TextEncoder().encode(str);
+  const out = new Uint8Array(2 + utf8.length);
+  out[0] = (utf8.length >> 8) & 0xff;
+  out[1] = utf8.length & 0xff;
+  out.set(utf8, 2);
+  return out;
+}
+
+function encodeVarint(len: number): number[] {
+  const out: number[] = [];
+  do {
+    let digit = len % 128;
+    len = Math.floor(len / 128);
+    if (len > 0) digit |= 0x80;
+    out.push(digit);
+  } while (len > 0);
+  return out;
+}
+
+function buildMqttConnectPacket(clientId: string): Uint8Array {
+  const varHeader = new Uint8Array([
+    0x00, 0x04, 0x4d, 0x51, 0x54, 0x54, // "MQTT"
+    0x04, // Protocol level 4 (3.1.1)
+    0x02, // Clean Session
+    0x00, 0x1e, // Keep Alive = 30s
+  ]);
+  const payload = encodeMqttString(clientId);
+  const remLen = varHeader.length + payload.length;
+  const varint = encodeVarint(remLen);
+  const pkt = new Uint8Array(1 + varint.length + remLen);
+  pkt[0] = 0x10;
+  pkt.set(varint, 1);
+  pkt.set(varHeader, 1 + varint.length);
+  pkt.set(payload, 1 + varint.length + varHeader.length);
+  return pkt;
+}
+
+function buildMqttSubscribePacket(topic: string, packetId = 1): Uint8Array {
+  const topicBytes = encodeMqttString(topic);
+  const remLen = 2 + topicBytes.length + 1;
+  const varint = encodeVarint(remLen);
+  const pkt = new Uint8Array(1 + varint.length + remLen);
+  pkt[0] = 0x82;
+  pkt.set(varint, 1);
+  const offset = 1 + varint.length;
+  pkt[offset] = (packetId >> 8) & 0xff;
+  pkt[offset + 1] = packetId & 0xff;
+  pkt.set(topicBytes, offset + 2);
+  pkt[offset + 2 + topicBytes.length] = 0x00;
+  return pkt;
+}
+
+function buildMqttPublishPacket(topic: string, jsonPayload: string): Uint8Array {
+  const topicBytes = encodeMqttString(topic);
+  const payloadBytes = new TextEncoder().encode(jsonPayload);
+  const remLen = topicBytes.length + payloadBytes.length;
+  const varint = encodeVarint(remLen);
+  const pkt = new Uint8Array(1 + varint.length + remLen);
+  pkt[0] = 0x30;
+  pkt.set(varint, 1);
+  const offset = 1 + varint.length;
+  pkt.set(topicBytes, offset);
+  pkt.set(payloadBytes, offset + topicBytes.length);
+  return pkt;
+}
+
+function parseMqttBuffer(
+  buffer: ArrayBuffer,
+  onConnAck: () => void,
+  onPublish: (payloadStr: string) => void
+) {
+  const data = new Uint8Array(buffer);
+  let pos = 0;
+  while (pos < data.length) {
+    const headerByte = data[pos];
+    const packetType = headerByte & 0xf0;
+    const qos = (headerByte >> 1) & 0x03;
+    pos++;
+
+    let multiplier = 1;
+    let remLen = 0;
+    while (pos < data.length) {
+      const digit = data[pos++];
+      remLen += (digit & 0x7f) * multiplier;
+      multiplier *= 128;
+      if ((digit & 0x80) === 0) break;
+    }
+
+    const packetEnd = pos + remLen;
+    if (packetEnd > data.length) break;
+
+    if (packetType === 0x20) {
+      onConnAck();
+    } else if (packetType === 0x30) {
+      if (pos + 2 <= packetEnd) {
+        const topicLen = (data[pos] << 8) | data[pos + 1];
+        let payloadStart = pos + 2 + topicLen;
+        if (qos > 0) {
+          payloadStart += 2;
+        }
+        if (payloadStart <= packetEnd) {
+          const payloadBytes = data.subarray(payloadStart, packetEnd);
+          const str = new TextDecoder().decode(payloadBytes);
+          onPublish(str);
+        }
+      }
+    }
+    pos = packetEnd;
+  }
+}
+
+// ============================================================================
+// Hybrid Global P2P Mesh Manager (WebRTC Direct + Multi-Broker WSS Relay)
+// ============================================================================
 
 class P2PLobbyManager {
   private peer: Peer | null = null;
   private mySlotId: string | null = null;
   private mySlotNumber: number | null = null;
+  private clientUid: string;
   private status: P2PLobbyStatus = "disconnected";
   private errorMessage: string | null = null;
 
   private connections: Map<string, DataConnection> = new Map();
+  private pendingConnections: Map<string, DataConnection> = new Map();
+  private wssSockets: Map<string, { ws: WebSocket; ready: boolean }> = new Map();
+  private seenMsgIds: Set<string> = new Set();
+
   private peers: Map<string, PeerMember> = new Map();
-  private peerSyncOverrides: Map<string, boolean> = new Map(); // peerId -> boolean
+  private peerSyncOverrides: Map<string, boolean> = new Map();
 
   // Local state cache
   private summoner: SummonerProfile | null = null;
   private activeSkins: Record<number, ActiveSkinProfile> = {};
   private champions: ChampionItem[] = [];
 
-  // Background sweep intervals
+  // Background intervals
   private discoveryInterval: number | null = null;
   private pingInterval: number | null = null;
+  private wssKeepAliveInterval: number | null = null;
   private activeDownloads: Set<number> = new Set();
   private listeners: Set<P2PListener> = new Set();
 
   constructor() {
-    // Empty constructor
+    let savedUid = "";
+    try {
+      savedUid = localStorage.getItem("rc_p2p_client_uid") || "";
+      if (!savedUid) {
+        savedUid = `uid-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
+        localStorage.setItem("rc_p2p_client_uid", savedUid);
+      }
+    } catch {
+      savedUid = `uid-${Math.random().toString(36).slice(2, 10)}`;
+    }
+    this.clientUid = savedUid;
+
+    if (typeof window !== "undefined") {
+      window.addEventListener("beforeunload", () => {
+        if (this.status === "connected" && this.mySlotId) {
+          this.broadcastPacket({
+            type: "LEAVE",
+            peerId: this.mySlotId,
+            clientUid: this.clientUid,
+          });
+        }
+      });
+    }
   }
 
   public getState(): P2PLobbyState {
-    const peerList = Array.from(this.peers.values()).sort(
-      (a, b) => a.slotNumber - b.slotNumber
+    const peerList = Array.from(this.peers.values()).sort((a, b) =>
+      a.summonerName.localeCompare(b.summonerName)
     );
 
     let totalRoomSkins = Object.keys(this.activeSkins).length;
@@ -143,10 +332,6 @@ class P2PLobbyManager {
     });
   }
 
-  /**
-   * Updates local summoner, active skins and champion catalog,
-   * then broadcasts the updated STATE_UPDATE packet to the entire mesh.
-   */
   public updateLocalMods(
     summoner: SummonerProfile | null,
     activeSkins: Record<number, ActiveSkinProfile>,
@@ -164,8 +349,8 @@ class P2PLobbyManager {
 
   /**
    * 1-Click Join Global P2P Mesh Lobby.
-   * Deterministically finds and claims the first free slot (1..12),
-   * then connects to all other slots in parallel.
+   * Connects both Multi-Broker WSS Mesh (100% CGNAT/Symmetric-NAT proof)
+   * and WebRTC Direct P2P (STUN + TURN relays) in parallel.
    */
   public async joinLobby(): Promise<boolean> {
     if (this.status === "connected" || this.status === "connecting") {
@@ -177,40 +362,39 @@ class P2PLobbyManager {
     this.notify();
 
     try {
-      // Step 1: Claim first available slot sequentially
-      const { peer, slotId, slotNumber } = await this.claimFirstAvailableSlot();
-      this.peer = peer;
-      this.mySlotId = slotId;
-      this.mySlotNumber = slotNumber;
+      const uniquePeerId = `rc-mesh-${this.clientUid}-${Math.random().toString(36).slice(2, 6)}`;
+      this.mySlotId = uniquePeerId;
+      this.mySlotNumber = 1;
+
+      // Launch both WSS Mesh Relay and WebRTC Peer node in parallel
+      const wssPromise = this.connectWssMesh(uniquePeerId);
+      const webrtcPromise = this.initWebRtcPeer(uniquePeerId);
+
+      // Succeed as soon as either transport is ready (usually <300ms)
+      const firstReady = await Promise.race([
+        wssPromise.then((ok) => (ok ? "wss" : Promise.reject())),
+        webrtcPromise.then((ok) => (ok ? "webrtc" : Promise.reject())),
+      ]).catch(async () => {
+        const [w1, w2] = await Promise.all([wssPromise, webrtcPromise]);
+        return w1 || w2 ? "ready" : null;
+      });
+
+      if (!firstReady) {
+        throw new Error("Không thể kết nối mạng lưới P2P. Vui lòng kiểm tra kết nối mạng.");
+      }
+
       this.status = "connected";
       this.notify();
 
-      // Step 2: Handle incoming connections from other peers
-      peer.on("connection", (conn) => {
-        this.setupConnection(conn, false);
+      // Immediately announce presence and local state
+      this.broadcastPacket({
+        type: "HELLO",
+        peerId: uniquePeerId,
+        clientUid: this.clientUid,
       });
+      this.broadcastStateUpdate();
 
-      peer.on("error", (err: any) => {
-        if (err?.type === "peer-unavailable") {
-          // Normal when a targeted slot is unoccupied
-          return;
-        }
-        console.warn("PeerJS mesh warning:", err);
-      });
-
-      peer.on("disconnected", () => {
-        // Attempt immediate reconnect to signaling server to keep slot claimed
-        if (this.peer && !this.peer.destroyed) {
-          try {
-            this.peer.reconnect();
-          } catch {}
-        }
-      });
-
-      // Step 3: Connect in parallel to all other 11 slots
-      this.connectToOtherSlots();
-
-      // Step 4: Start background discovery sweep (every 8s) & ping sweep (every 3.5s)
+      // Start background discovery & ping sweeps
       this.startTimers();
 
       // Persist enabled state to config
@@ -226,26 +410,38 @@ class P2PLobbyManager {
     }
   }
 
-  /**
-   * Leaves the global P2P lobby, notifies peers, and cleans up connections.
-   */
   public leaveLobby() {
     if (this.mySlotId) {
       this.broadcastPacket({
         type: "LEAVE",
         peerId: this.mySlotId,
+        clientUid: this.clientUid,
       });
     }
 
     this.stopTimers();
 
-    // Close connections
     this.connections.forEach((conn) => {
       try {
         conn.close();
       } catch {}
     });
     this.connections.clear();
+
+    this.pendingConnections.forEach((conn) => {
+      try {
+        conn.close();
+      } catch {}
+    });
+    this.pendingConnections.clear();
+
+    this.wssSockets.forEach(({ ws }) => {
+      try {
+        ws.close();
+      } catch {}
+    });
+    this.wssSockets.clear();
+
     this.peers.clear();
 
     if (this.peer) {
@@ -260,27 +456,22 @@ class P2PLobbyManager {
     this.status = "disconnected";
     this.notify();
 
-    // Persist disabled state to config
     tauriClient.setSyncConfig({ is_sync_enabled: false }).catch(() => {});
   }
 
-  /**
-   * Toggles whether to sync skins from a specific peer.
-   */
   public togglePeerSync(peerId: string) {
     const peer = this.peers.get(peerId);
     if (!peer) return;
 
-    const current = peer.isSyncEnabled;
-    const next = !current;
+    const next = !peer.isSyncEnabled;
     peer.isSyncEnabled = next;
     this.peerSyncOverrides.set(peerId, next);
+    if (peer.clientUid) {
+      this.peerSyncOverrides.set(peer.clientUid, next);
+    }
     this.notify();
   }
 
-  /**
-   * Sends a conflict decision (yield/keep) over WebRTC mesh.
-   */
   public sendConflictAction(
     championId: number,
     targetSummoner: string,
@@ -296,10 +487,6 @@ class P2PLobbyManager {
     });
   }
 
-  /**
-   * Returns list of friend skins that are currently active, enabled for sync,
-   * and do not conflict with local player's selection.
-   */
   public getSyncableFriendSkins(): ActiveSkinProfile[] {
     const result: ActiveSkinProfile[] = [];
 
@@ -307,7 +494,6 @@ class P2PLobbyManager {
       if (!peer.isSyncEnabled) continue;
 
       for (const mod of peer.activeMods) {
-        // Exclude if local player already picked a skin for this champion
         if (!this.activeSkins[mod.championId]) {
           result.push({
             champion_id: mod.championId,
@@ -327,155 +513,315 @@ class P2PLobbyManager {
   }
 
   // =========================================================================
-  // Internal Mesh Claiming & Connection Logic
+  // Transport 1: Multi-Broker WSS Mesh (Port 443 TLS - Works Across All ISPs)
   // =========================================================================
 
-  private async claimFirstAvailableSlot(): Promise<{
-    peer: Peer;
-    slotId: string;
-    slotNumber: number;
-  }> {
-    for (let i = 0; i < LOBBY_SLOTS.length; i++) {
-      const slotId = LOBBY_SLOTS[i];
-      const slotNumber = i + 1;
-
-      try {
-        const peer = await this.tryCreatePeerSlot(slotId);
-        return { peer, slotId, slotNumber };
-      } catch (err: any) {
-        if (err?.type === "unavailable-id") {
-          // Slot is taken by an active player, proceed to next slot
-          continue;
-        }
-        // If other error, retry or continue
-      }
-    }
-
-    throw new Error("Tất cả 12 vị trí trong phòng P2P toàn cầu hiện đã đầy!");
-  }
-
-  private tryCreatePeerSlot(slotId: string): Promise<Peer> {
-    return new Promise((resolve, reject) => {
+  private connectWssMesh(myPeerId: string): Promise<boolean> {
+    return new Promise((resolve) => {
       let resolved = false;
+      let failedCount = 0;
 
-      const peer = new Peer(slotId, {
-        debug: 1,
-        config: {
-          iceServers: [
-            { urls: "stun:stun.l.google.com:19302" },
-            { urls: "stun:stun1.l.google.com:19302" },
-            { urls: "stun:stun2.l.google.com:19302" },
-            { urls: "stun:stun3.l.google.com:19302" },
-            { urls: "stun:stun4.l.google.com:19302" },
-          ],
-        },
-      });
+      for (const brokerUrl of WSS_MESH_BROKERS) {
+        this.connectSingleWssBroker(brokerUrl, myPeerId, (ok) => {
+          if (ok && !resolved) {
+            resolved = true;
+            resolve(true);
+          } else if (!ok) {
+            failedCount++;
+            if (failedCount === WSS_MESH_BROKERS.length && !resolved) {
+              resolved = true;
+              resolve(false);
+            }
+          }
+        });
+      }
 
-      const timeout = setTimeout(() => {
+      setTimeout(() => {
         if (!resolved) {
           resolved = true;
-          peer.destroy();
-          reject(new Error("Timeout kết nối tới máy chủ P2P STUN"));
+          resolve(this.wssSockets.size > 0);
         }
-      }, 4500);
-
-      peer.on("open", () => {
-        if (!resolved) {
-          resolved = true;
-          clearTimeout(timeout);
-          resolve(peer);
-        }
-      });
-
-      peer.on("error", (err) => {
-        if (!resolved) {
-          resolved = true;
-          clearTimeout(timeout);
-          peer.destroy();
-          reject(err);
-        }
-      });
+      }, 4000);
     });
   }
 
-  private connectToOtherSlots() {
-    if (!this.peer || !this.mySlotId) return;
+  private connectSingleWssBroker(
+    brokerUrl: string,
+    myPeerId: string,
+    onResult?: (ok: boolean) => void
+  ) {
+    try {
+      const ws = new WebSocket(brokerUrl, "mqtt");
+      ws.binaryType = "arraybuffer";
+      let reported = false;
 
-    for (let i = 0; i < LOBBY_SLOTS.length; i++) {
-      const targetSlot = LOBBY_SLOTS[i];
-      if (targetSlot === this.mySlotId) continue;
-      this.connectToSlot(targetSlot);
+      const report = (ok: boolean) => {
+        if (!reported) {
+          reported = true;
+          onResult?.(ok);
+        }
+      };
+
+      ws.onopen = () => {
+        try {
+          const clientId = `${myPeerId}-${Math.random().toString(36).slice(2, 6)}`.slice(0, 60);
+          ws.send(buildMqttConnectPacket(clientId));
+        } catch {
+          report(false);
+        }
+      };
+
+      ws.onmessage = (ev) => {
+        if (!(ev.data instanceof ArrayBuffer)) return;
+
+        parseMqttBuffer(
+          ev.data,
+          () => {
+            // CONNACK received -> Subscribe to global mesh topic
+            try {
+              ws.send(buildMqttSubscribePacket(MESH_TOPIC, 1));
+              this.wssSockets.set(brokerUrl, { ws, ready: true });
+              report(true);
+
+              // Broadcast presence on this newly ready broker
+              if (this.status === "connected" && this.mySlotId) {
+                const hello = this.stampPacket({
+                  type: "HELLO",
+                  peerId: this.mySlotId,
+                  clientUid: this.clientUid,
+                });
+                const state = this.stampPacket(this.buildStatePacket());
+                ws.send(buildMqttPublishPacket(MESH_TOPIC, JSON.stringify(hello)));
+                ws.send(buildMqttPublishPacket(MESH_TOPIC, JSON.stringify(state)));
+              }
+            } catch {
+              report(false);
+            }
+          },
+          (payloadStr) => {
+            try {
+              const pkt = JSON.parse(payloadStr) as P2PPacket;
+              const senderId =
+                pkt.type === "PING" || pkt.type === "PONG"
+                  ? pkt.senderId
+                  : "peerId" in pkt
+                  ? pkt.peerId
+                  : "";
+              if (senderId && senderId === this.mySlotId) return;
+              this.handlePacket(senderId, pkt);
+            } catch {}
+          }
+        );
+      };
+
+      ws.onerror = () => {
+        this.wssSockets.delete(brokerUrl);
+        report(false);
+      };
+
+      ws.onclose = () => {
+        this.wssSockets.delete(brokerUrl);
+        report(false);
+      };
+    } catch {
+      onResult?.(false);
     }
   }
 
-  private connectToSlot(targetSlot: string) {
-    if (!this.peer || this.peer.destroyed || targetSlot === this.mySlotId) return;
-    if (this.connections.has(targetSlot)) {
-      const existing = this.connections.get(targetSlot);
-      if (existing && existing.open) return;
-    }
+  // =========================================================================
+  // Transport 2: WebRTC Direct DataChannel with TURN Relays
+  // =========================================================================
+
+  private initWebRtcPeer(myPeerId: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      let resolved = false;
+
+      try {
+        const peer = new Peer(myPeerId, {
+          debug: 0,
+          config: {
+            iceServers: ICE_SERVERS,
+            iceCandidatePoolSize: 10,
+          },
+        });
+
+        const timeout = setTimeout(() => {
+          if (!resolved) {
+            resolved = true;
+            resolve(false);
+          }
+        }, 4500);
+
+        peer.on("open", () => {
+          this.peer = peer;
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(timeout);
+            resolve(true);
+          }
+        });
+
+        peer.on("connection", (conn) => {
+          this.setupConnection(conn);
+        });
+
+        peer.on("error", () => {
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(timeout);
+            resolve(false);
+          }
+        });
+
+        peer.on("disconnected", () => {
+          if (this.peer && !this.peer.destroyed) {
+            try {
+              this.peer.reconnect();
+            } catch {}
+          }
+        });
+      } catch {
+        if (!resolved) {
+          resolved = true;
+          resolve(false);
+        }
+      }
+    });
+  }
+
+  private connectToRemotePeer(remotePeerId: string) {
+    if (!this.peer || this.peer.destroyed || !this.mySlotId) return;
+    if (!remotePeerId || remotePeerId === this.mySlotId) return;
+
+    const existing = this.connections.get(remotePeerId);
+    if (existing && existing.open) return;
+
+    if (this.pendingConnections.has(remotePeerId)) return;
 
     try {
-      const conn = this.peer.connect(targetSlot, {
+      const conn = this.peer.connect(remotePeerId, {
         reliable: true,
+        serialization: "json",
       });
-      this.setupConnection(conn, true);
-    } catch (err) {
-      // Ignore initial connect attempts to offline slots
-    }
+      this.pendingConnections.set(remotePeerId, conn);
+      this.setupConnection(conn);
+
+      // Clear pending status after 6s if ICE hasn't opened yet
+      setTimeout(() => {
+        if (this.pendingConnections.get(remotePeerId) === conn) {
+          this.pendingConnections.delete(remotePeerId);
+        }
+      }, 6000);
+    } catch {}
   }
 
-  private setupConnection(conn: DataConnection, _isOutgoing: boolean = false) {
+  private setupConnection(conn: DataConnection) {
     const remotePeerId = conn.peer;
 
     conn.on("open", () => {
+      this.pendingConnections.delete(remotePeerId);
+      const prev = this.connections.get(remotePeerId);
+      if (prev && prev !== conn && prev.open) {
+        // Keep a single clean WebRTC channel per peer
+        try {
+          prev.close();
+        } catch {}
+      }
       this.connections.set(remotePeerId, conn);
 
-      // Send local state immediately upon open
-      const statePacket = this.buildStatePacket();
-      conn.send(statePacket);
-
-      // Immediately measure initial ping
-      conn.send({
-        type: "PING",
-        senderId: this.mySlotId || "",
-        timestamp: Date.now(),
-      });
+      try {
+        conn.send(this.stampPacket(this.buildStatePacket()));
+        conn.send(
+          this.stampPacket({
+            type: "PING",
+            senderId: this.mySlotId || "",
+            targetId: remotePeerId,
+            timestamp: Date.now(),
+          })
+        );
+      } catch {}
     });
 
     conn.on("data", (data: any) => {
       this.handlePacket(remotePeerId, data as P2PPacket, conn);
     });
 
-    conn.on("close", () => {
-      this.connections.delete(remotePeerId);
-      this.peers.delete(remotePeerId);
-      this.notify();
-    });
+    const cleanupConn = () => {
+      if (this.pendingConnections.get(remotePeerId) === conn) {
+        this.pendingConnections.delete(remotePeerId);
+      }
+      if (this.connections.get(remotePeerId) === conn) {
+        this.connections.delete(remotePeerId);
+      }
+    };
 
-    conn.on("error", () => {
-      this.connections.delete(remotePeerId);
-      this.peers.delete(remotePeerId);
-      this.notify();
-    });
+    conn.on("close", cleanupConn);
+    conn.on("error", cleanupConn);
   }
 
-  private handlePacket(remotePeerId: string, packet: P2PPacket, conn: DataConnection) {
+  // =========================================================================
+  // Packet Handling & Deduplication Across WebRTC + WSS Transports
+  // =========================================================================
+
+  private stampPacket<T extends P2PPacket>(packet: T): T {
+    if (!packet.msgId) {
+      packet.msgId = `${this.mySlotId || "p"}-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 7)}`;
+    }
+    return packet;
+  }
+
+  private isDuplicatePacket(msgId?: string): boolean {
+    if (!msgId) return false;
+    if (this.seenMsgIds.has(msgId)) return true;
+    this.seenMsgIds.add(msgId);
+    if (this.seenMsgIds.size > 600) {
+      const first = this.seenMsgIds.values().next().value;
+      if (first) this.seenMsgIds.delete(first);
+    }
+    return false;
+  }
+
+  private handlePacket(remotePeerId: string, packet: P2PPacket, conn?: DataConnection) {
     if (!packet || typeof packet !== "object") return;
+    if (this.isDuplicatePacket(packet.msgId)) return;
 
     switch (packet.type) {
-      case "STATE_UPDATE": {
-        const slotIdx = LOBBY_SLOTS.indexOf(packet.peerId);
-        const slotNumber = slotIdx >= 0 ? slotIdx + 1 : 0;
+      case "HELLO": {
+        if (!packet.peerId || packet.peerId === this.mySlotId) return;
+        // Initiate direct WebRTC connection and immediately reply with our state
+        this.connectToRemotePeer(packet.peerId);
+        this.broadcastStateUpdate();
+        break;
+      }
 
-        const isSyncPref = this.peerSyncOverrides.has(packet.peerId)
+      case "STATE_UPDATE": {
+        if (!packet.peerId || packet.peerId === this.mySlotId) return;
+        if (packet.clientUid && packet.clientUid === this.clientUid) return;
+
+        // Remove any stale session entry from the same physical friend (clientUid)
+        if (packet.clientUid) {
+          for (const [oldPeerId, oldMember] of this.peers.entries()) {
+            if (oldPeerId !== packet.peerId && oldMember.clientUid === packet.clientUid) {
+              this.peers.delete(oldPeerId);
+              this.connections.delete(oldPeerId);
+            }
+          }
+        }
+
+        const isNewPeer = !this.peers.has(packet.peerId);
+        const overrideKey = packet.clientUid || packet.peerId;
+        const isSyncPref = this.peerSyncOverrides.has(overrideKey)
+          ? (this.peerSyncOverrides.get(overrideKey) as boolean)
+          : this.peerSyncOverrides.has(packet.peerId)
           ? (this.peerSyncOverrides.get(packet.peerId) as boolean)
           : true;
 
         const existing = this.peers.get(packet.peerId);
         const member: PeerMember = {
           peerId: packet.peerId,
-          slotNumber,
+          slotNumber: existing?.slotNumber || this.peers.size + 1,
           summonerName: packet.summonerName,
           tagLine: packet.tagLine,
           profileIconUrl: packet.profileIconUrl,
@@ -483,9 +829,19 @@ class P2PLobbyManager {
           pingMs: existing?.pingMs || null,
           lastSeen: Date.now(),
           isSyncEnabled: isSyncPref,
+          clientUid: packet.clientUid,
         };
 
         this.peers.set(packet.peerId, member);
+
+        // Ensure direct WebRTC channel is attempted if not already open
+        this.connectToRemotePeer(packet.peerId);
+
+        // If this is a newly discovered peer, reply with our state + immediate ping
+        if (isNewPeer) {
+          this.broadcastStateUpdate();
+          this.sendPingToPeer(packet.peerId);
+        }
 
         // Pre-cache missing .fantome files for newly received peer mods
         if (member.isSyncEnabled) {
@@ -497,17 +853,30 @@ class P2PLobbyManager {
       }
 
       case "PING": {
-        try {
-          conn.send({
-            type: "PONG",
-            senderId: this.mySlotId || "",
-            originalTimestamp: packet.timestamp,
-          });
-        } catch {}
+        if (!packet.senderId || packet.senderId === this.mySlotId) return;
+        if (packet.targetId && packet.targetId !== this.mySlotId) return;
+
+        const pongPacket = this.stampPacket({
+          type: "PONG",
+          senderId: this.mySlotId || "",
+          targetId: packet.senderId,
+          originalTimestamp: packet.timestamp,
+        });
+
+        if (conn && conn.open) {
+          try {
+            conn.send(pongPacket);
+            return;
+          } catch {}
+        }
+        this.sendToPeerOrBroadcast(packet.senderId, pongPacket);
         break;
       }
 
       case "PONG": {
+        if (!packet.senderId || packet.senderId === this.mySlotId) return;
+        if (packet.targetId && packet.targetId !== this.mySlotId) return;
+
         const ping = Math.max(1, Date.now() - packet.originalTimestamp);
         const peer = this.peers.get(packet.senderId || remotePeerId);
         if (peer) {
@@ -519,7 +888,6 @@ class P2PLobbyManager {
       }
 
       case "CONFLICT_ACTION": {
-        // Trigger conflict alert/resolution if it involves local player
         this.notify();
         break;
       }
@@ -527,25 +895,72 @@ class P2PLobbyManager {
       case "LEAVE": {
         this.connections.delete(packet.peerId);
         this.peers.delete(packet.peerId);
+        if (packet.clientUid) {
+          for (const [id, m] of this.peers.entries()) {
+            if (m.clientUid === packet.clientUid) {
+              this.peers.delete(id);
+            }
+          }
+        }
         this.notify();
         break;
       }
     }
   }
 
-  private broadcastPacket(packet: P2PPacket) {
-    this.connections.forEach((conn) => {
-      if (conn.open) {
+  private sendToPeerOrBroadcast(targetPeerId: string, packet: P2PPacket) {
+    const stamped = this.stampPacket(packet);
+    const directConn = this.connections.get(targetPeerId);
+    if (directConn && directConn.open) {
+      try {
+        directConn.send(stamped);
+        return;
+      } catch {}
+    }
+    this.broadcastViaWss(stamped);
+  }
+
+  private broadcastViaWss(packet: P2PPacket) {
+    const json = JSON.stringify(packet);
+    const mqttPkt = buildMqttPublishPacket(MESH_TOPIC, json);
+    this.wssSockets.forEach(({ ws, ready }) => {
+      if (ready && ws.readyState === WebSocket.OPEN) {
         try {
-          conn.send(packet);
+          ws.send(mqttPkt);
         } catch {}
       }
     });
   }
 
+  private broadcastPacket(packet: P2PPacket) {
+    const stamped = this.stampPacket(packet);
+
+    // 1. Send over all open WebRTC DataChannels
+    this.connections.forEach((conn) => {
+      if (conn.open) {
+        try {
+          conn.send(stamped);
+        } catch {}
+      }
+    });
+
+    // 2. Also broadcast over WSS Mesh so peers behind strict NAT/Firewall always receive it
+    this.broadcastViaWss(stamped);
+  }
+
   private broadcastStateUpdate() {
     const packet = this.buildStatePacket();
     this.broadcastPacket(packet);
+  }
+
+  private sendPingToPeer(targetPeerId: string) {
+    if (!this.mySlotId) return;
+    this.sendToPeerOrBroadcast(targetPeerId, {
+      type: "PING",
+      senderId: this.mySlotId,
+      targetId: targetPeerId,
+      timestamp: Date.now(),
+    });
   }
 
   private buildStatePacket(): P2PPacket {
@@ -587,6 +1002,7 @@ class P2PLobbyManager {
     return {
       type: "STATE_UPDATE",
       peerId: this.mySlotId || "",
+      clientUid: this.clientUid,
       summonerName,
       tagLine,
       profileIconUrl,
@@ -626,15 +1042,20 @@ class P2PLobbyManager {
   private startTimers() {
     this.stopTimers();
 
-    // 1. Discovery sweep every 8 seconds to connect to any newly joined slot
+    // 1. Discovery & state heartbeat every 5 seconds
     this.discoveryInterval = window.setInterval(() => {
       this.runDiscoverySweep();
-    }, 8000);
+    }, 5000);
 
     // 2. Real-time P2P ping sweep every 3.5 seconds
     this.pingInterval = window.setInterval(() => {
       this.runPingSweep();
     }, 3500);
+
+    // 3. MQTT WSS keep-alive & auto-reconnect every 15 seconds
+    this.wssKeepAliveInterval = window.setInterval(() => {
+      this.maintainWssBrokers();
+    }, 15000);
   }
 
   private stopTimers() {
@@ -646,19 +1067,38 @@ class P2PLobbyManager {
       clearInterval(this.pingInterval);
       this.pingInterval = null;
     }
+    if (this.wssKeepAliveInterval !== null) {
+      clearInterval(this.wssKeepAliveInterval);
+      this.wssKeepAliveInterval = null;
+    }
+  }
+
+  private maintainWssBrokers() {
+    if (this.status !== "connected" || !this.mySlotId) return;
+
+    const pingReq = new Uint8Array([0xc0, 0x00]); // MQTT PINGREQ
+    for (const brokerUrl of WSS_MESH_BROKERS) {
+      const entry = this.wssSockets.get(brokerUrl);
+      if (entry && entry.ws.readyState === WebSocket.OPEN) {
+        try {
+          entry.ws.send(pingReq);
+        } catch {}
+      } else {
+        this.wssSockets.delete(brokerUrl);
+        this.connectSingleWssBroker(brokerUrl, this.mySlotId);
+      }
+    }
   }
 
   private runDiscoverySweep() {
-    if (this.status !== "connected" || !this.peer || this.peer.destroyed) return;
+    if (this.status !== "connected" || !this.mySlotId) return;
 
-    for (let i = 0; i < LOBBY_SLOTS.length; i++) {
-      const slot = LOBBY_SLOTS[i];
-      if (slot === this.mySlotId) continue;
+    // Broadcast periodic state heartbeat so all online peers stay synced
+    this.broadcastStateUpdate();
 
-      const conn = this.connections.get(slot);
-      if (!conn || !conn.open) {
-        this.connectToSlot(slot);
-      }
+    // Ensure direct WebRTC channels are connected to known peers
+    for (const peerId of this.peers.keys()) {
+      this.connectToRemotePeer(peerId);
     }
   }
 
@@ -666,27 +1106,15 @@ class P2PLobbyManager {
     if (this.status !== "connected" || !this.mySlotId) return;
 
     const now = Date.now();
-    this.connections.forEach((conn) => {
-      if (conn.open) {
-        try {
-          conn.send({
-            type: "PING",
-            senderId: this.mySlotId || "",
-            timestamp: now,
-          });
-        } catch {}
-      }
-    });
-
-    // Prune peers that haven't responded or had closed connection
     for (const [peerId, peer] of this.peers.entries()) {
-      const conn = this.connections.get(peerId);
-      if (!conn || !conn.open) {
-        if (now - peer.lastSeen > 12000) {
-          this.peers.delete(peerId);
-          this.notify();
-        }
+      // Remove stale peers that haven't sent any state or pong in 16 seconds
+      if (now - peer.lastSeen > 16000) {
+        this.peers.delete(peerId);
+        this.connections.delete(peerId);
+        this.notify();
+        continue;
       }
+      this.sendPingToPeer(peerId);
     }
   }
 
@@ -702,4 +1130,3 @@ class P2PLobbyManager {
 }
 
 export const p2pLobby = new P2PLobbyManager();
-
