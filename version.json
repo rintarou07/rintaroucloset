@@ -1,13 +1,14 @@
 {
-  "version": "0.1.7",
+  "version": "0.1.8",
   "min_required_version": "0.1.0",
   "release_date": "2026-11-08",
-  "title": "Bản cập nhật Rintarou Closet v0.1.7 - Bypass Triệt Để Lỗi Chặn Skin [VRF00000008]",
+  "title": "Bản cập nhật Rintarou Closet v0.1.8 - Fix Lỗi Kết Nối Patcher & Auto Retry Hook",
   "changelog": [
-    "Bypass triệt để cơ chế Host Verification [VRF00000008] trong ltk_patcher_dll.dll",
-    "Ngăn chặn trạng thái refusing overlay do kiểm tra chữ ký số Natoken LLC / ltk-manager.exe",
-    "Tự động đồng bộ WAD overlay sang profile LTK Manager (%APPDATA%\\dev.leaguetoolkit.manager)",
-    "Đảm bảo skin mod được nạp và hiển thị 100% trong trận đấu"
+    "Cơ chế tự động thử lại (Auto-Retry Scan) khi SetWindowsHookEx gặp lỗi thời gian khởi tạo",
+    "Bảo đảm ltk_patcher_dll.dll đã patch chống [VRF00000008] luôn được trích xuất và đồng bộ 100%",
+    "Bổ sung tải ltk_patcher_dll.dll song song trong tính năng 1-Click Cập Nhật",
+    "Loại bỏ xung đột cache DLL cũ từ LTK Manager",
+    "Đảm bảo trang phục mod (Aatrox Huyết Nguyệt Hàng Hiệu,...) hoạt động mượt mà trong trận"
   ],
   "download_url": "https://raw.githubusercontent.com/rintarou07/rintaroucloset/main/releases/Rintarou-Closet.exe",
   "direct_exe_url": "https://raw.githubusercontent.com/rintarou07/rintaroucloset/main/releases/Rintarou-Closet.exe",

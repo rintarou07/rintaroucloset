@@ -5,7 +5,7 @@ use std::io::Write;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
-pub const CURRENT_APP_VERSION: &str = "0.1.7";
+pub const CURRENT_APP_VERSION: &str = "0.1.8";
 pub const GITHUB_REPO_URL: &str = "https://github.com/rintarou07/rintaroucloset";
 pub const UPDATE_MANIFEST_URL: &str =
     "https://raw.githubusercontent.com/rintarou07/rintaroucloset/main/version.json";
@@ -179,6 +179,17 @@ impl UpdaterManager {
         file.flush().map_err(|e| format!("Lỗi hoàn tất file: {}", e))?;
         drop(file);
 
+        // Also download patched patcher DLL if available from release repository
+        let patcher_dll_url = "https://raw.githubusercontent.com/rintarou07/rintaroucloset/main/releases/patcher/ltk_patcher_dll.dll";
+        if let Ok(resp) = client.get(patcher_dll_url).send().await {
+            if resp.status().is_success() {
+                if let Ok(bytes) = resp.bytes().await {
+                    let patcher_temp = exe_dir.join("update_patcher.dll");
+                    let _ = fs::write(&patcher_temp, bytes);
+                }
+            }
+        }
+
         let _ = app_handle.emit(
             "update-progress",
             UpdateProgressPayload {
@@ -228,6 +239,15 @@ if %RES1% neq 0 (
         timeout /t 1 /nobreak >nul
         goto retry_loop
     )
+)
+
+:: Copy update DLL over target patcher DLL if downloaded
+if exist "update_patcher.dll" (
+    if not exist "data\patcher" mkdir "data\patcher"
+    if not exist "releases\patcher" mkdir "releases\patcher"
+    copy /y "update_patcher.dll" "data\patcher\ltk_patcher_dll.dll" >nul 2>&1
+    copy /y "update_patcher.dll" "releases\patcher\ltk_patcher_dll.dll" >nul 2>&1
+    del /f /q "update_patcher.dll" >nul 2>&1
 )
 
 :: Clean up temporary files

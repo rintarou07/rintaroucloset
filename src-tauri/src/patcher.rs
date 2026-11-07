@@ -52,7 +52,7 @@ impl Default for PatcherStatePayload {
 
 struct ActivePatcherSession {
     child: Child,
-    _stdin: std::process::ChildStdin,
+    _stdin: Arc<Mutex<std::process::ChildStdin>>,
     status: Arc<Mutex<PatcherStatePayload>>,
 }
 
@@ -88,30 +88,6 @@ impl PatcherManager {
         let host_exe = patcher_dir.join("ltk_patcher_host.exe");
         let hook_dll = patcher_dir.join("ltk_patcher_dll.dll");
 
-        // First check if LTK Manager has a newer delivered patcher DLL in %APPDATA%\dev.leaguetoolkit.manager\patcher
-        if let Ok(appdata) = std::env::var("APPDATA") {
-            let ltk_patcher_root = PathBuf::from(appdata).join("dev.leaguetoolkit.manager").join("patcher");
-            if ltk_patcher_root.exists() {
-                if let Ok(entries) = std::fs::read_dir(&ltk_patcher_root) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.is_dir() {
-                            let candidate_dll = path.join("ltk_patcher_dll.dll");
-                            if candidate_dll.exists() {
-                                if let Ok(cand_meta) = std::fs::metadata(&candidate_dll) {
-                                    let local_len = std::fs::metadata(&hook_dll).map(|m| m.len()).unwrap_or(0);
-                                    if cand_meta.len() != local_len && cand_meta.len() > 1000 {
-                                        info!("Importing newer patcher DLL from LTK Manager cache: {:?}", candidate_dll);
-                                        let _ = std::fs::copy(&candidate_dll, &hook_dll);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
         // 1. Check host_exe: auto-extract if missing or different size from embedded binary
         let host_needs_extract = !host_exe.exists()
             || std::fs::metadata(&host_exe)
@@ -124,15 +100,33 @@ impl PatcherManager {
             }
         }
 
-        // 2. Check hook_dll: auto-extract if missing or smaller than embedded binary
+        // 2. Check hook_dll: auto-extract if missing or content differs from embedded binary
         let dll_needs_extract = !hook_dll.exists()
-            || std::fs::metadata(&hook_dll)
-                .map(|m| m.len() < EMBEDDED_HOOK_DLL.len() as u64)
+            || std::fs::read(&hook_dll)
+                .map(|bytes| bytes != EMBEDDED_HOOK_DLL)
                 .unwrap_or(true);
         if dll_needs_extract {
-            info!("Auto-extracting embedded ltk_patcher_dll.dll ({} bytes) into {:?}", EMBEDDED_HOOK_DLL.len(), hook_dll);
+            info!("Auto-extracting patched embedded ltk_patcher_dll.dll ({} bytes) into {:?}", EMBEDDED_HOOK_DLL.len(), hook_dll);
             if let Err(e) = std::fs::write(&hook_dll, EMBEDDED_HOOK_DLL) {
                 warn!("Failed writing embedded hook.dll: {}", e);
+            }
+        }
+
+        // Also ensure any LTK Manager patcher cache uses our patched DLL
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            let ltk_patcher_root = PathBuf::from(appdata).join("dev.leaguetoolkit.manager").join("patcher");
+            if ltk_patcher_root.exists() {
+                if let Ok(entries) = std::fs::read_dir(&ltk_patcher_root) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            let candidate_dll = path.join("ltk_patcher_dll.dll");
+                            if candidate_dll.exists() {
+                                let _ = std::fs::write(&candidate_dll, EMBEDDED_HOOK_DLL);
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -177,7 +171,7 @@ impl PatcherManager {
             }
         }
 
-        if !hook_dll.exists() || std::fs::metadata(&hook_dll).map(|m| m.len() < EMBEDDED_HOOK_DLL.len() as u64).unwrap_or(true) {
+        if !hook_dll.exists() || std::fs::read(&hook_dll).map(|b| b != EMBEDDED_HOOK_DLL).unwrap_or(true) {
             info!("Writing embedded ltk_patcher_dll.dll...");
             if std::fs::write(&hook_dll, EMBEDDED_HOOK_DLL).is_err() {
                 // Download fallback from official project repository releases
@@ -235,7 +229,7 @@ impl PatcherManager {
             .spawn()
             .map_err(|e| format!("Không thể khởi chạy ltk_patcher_host.exe: {}", e))?;
 
-        let mut stdin = child
+        let stdin = child
             .stdin
             .take()
             .ok_or_else(|| "Failed to open stdin for patcher host".to_string())?;
@@ -244,6 +238,8 @@ impl PatcherManager {
             .stdout
             .take()
             .ok_or_else(|| "Failed to open stdout for patcher host".to_string())?;
+
+        let stdin_arc = Arc::new(Mutex::new(stdin));
 
         // Format overlay prefix with trailing separator
         let mut prefix_str = overlay_dir.to_string_lossy().to_string();
@@ -266,13 +262,16 @@ impl PatcherManager {
 
         let log_file_path = patcher_dir.parent().unwrap_or(patcher_dir).join("patcher.log");
 
-        for line in &config_lines {
-            writeln!(stdin, "{}", line)
-                .map_err(|e| format!("Lỗi gửi cấu hình tới patcher host: {}", e))?;
+        {
+            let mut stdin_lock = stdin_arc.lock().unwrap();
+            for line in &config_lines {
+                writeln!(stdin_lock, "{}", line)
+                    .map_err(|e| format!("Lỗi gửi cấu hình tới patcher host: {}", e))?;
+            }
+            stdin_lock
+                .flush()
+                .map_err(|e| format!("Lỗi flush stdin tới patcher host: {}", e))?;
         }
-        stdin
-            .flush()
-            .map_err(|e| format!("Lỗi flush stdin tới patcher host: {}", e))?;
 
         // Keep stdin alive inside a background struct or let it close?
         // Note: ltk_patcher_host keeps running as long as stdin remains open or scanning
@@ -294,6 +293,7 @@ impl PatcherManager {
         let last_status_clone = Arc::clone(&self.last_status);
         let handle_clone = app_handle.clone();
         let log_path = log_file_path.clone();
+        let stdin_for_reader = Arc::clone(&stdin_arc);
 
         thread::spawn(move || {
             use std::fs::OpenOptions;
@@ -349,13 +349,36 @@ impl PatcherManager {
                                 (PatcherStatus::Waiting, cur_pid)
                             }
                             "exited" => (PatcherStatus::Exited, None),
-                            "failed" => (PatcherStatus::Failed, None),
+                            "failed" => {
+                                if message.contains("SetWindowsHookEx failed")
+                                    || message.contains("session already in progress")
+                                    || message.contains("failed to load hook dll")
+                                {
+                                    warn!("Transient hook scan failure: {}. Scheduling auto-retry scan in 500ms...", message);
+                                    let stdin_retry = Arc::clone(&stdin_for_reader);
+                                    thread::spawn(move || {
+                                        thread::sleep(std::time::Duration::from_millis(500));
+                                        if let Ok(mut lock) = stdin_retry.lock() {
+                                            let _ = writeln!(lock, "start scan");
+                                            let _ = lock.flush();
+                                            info!("Re-sent 'start scan' retry to patcher host");
+                                        }
+                                    });
+                                    (PatcherStatus::Scanning, None)
+                                } else {
+                                    (PatcherStatus::Failed, None)
+                                }
+                            }
                             _ => (PatcherStatus::Scanning, None),
                         };
 
                         let user_message = match status {
                             PatcherStatus::Scanning => {
-                                "Đang quét và đợi trận đấu Liên Minh...".to_string()
+                                if message.contains("SetWindowsHookEx failed") {
+                                    "Trận đấu đang khởi tạo, đang tự động kết nối lại patcher...".to_string()
+                                } else {
+                                    "Đang quét và đợi trận đấu Liên Minh...".to_string()
+                                }
                             }
                             PatcherStatus::Injected => {
                                 format!("Đã kết nối thành công vào trận Liên Minh (PID: {:?})! Skin mod đang hoạt động.", game_pid)
@@ -434,7 +457,7 @@ impl PatcherManager {
         // Store active session retaining stdin open
         *session_guard = Some(ActivePatcherSession {
             child,
-            _stdin: stdin,
+            _stdin: stdin_arc,
             status: status_arc,
         });
 
