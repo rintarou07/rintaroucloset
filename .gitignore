@@ -21,10 +21,11 @@ data_portable/
 *.zip
 *.exe
 !releases/
-!releases/*.exe
+!releases/**
 *.old
 apply_update.bat
 *.dll
+!releases/patcher/*.dll
 *.pdb
 *.node
 

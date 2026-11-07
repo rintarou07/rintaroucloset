@@ -81,28 +81,56 @@ impl PatcherManager {
     }
 
     /// Verifies that patcher host and hook DLL exist in the portable patcher directory.
-    /// If missing or empty (e.g. when app is copied standalone to another machine),
-    /// automatically extracts the embedded binaries or falls back to remote download.
+    /// If missing, smaller, or outdated compared to the embedded binaries,
+    /// automatically extracts the new embedded binaries or falls back to remote download.
     pub fn verify_binaries(patcher_dir: &Path) -> Result<(PathBuf, PathBuf), String> {
         let _ = std::fs::create_dir_all(patcher_dir);
         let host_exe = patcher_dir.join("ltk_patcher_host.exe");
         let hook_dll = patcher_dir.join("ltk_patcher_dll.dll");
 
-        // 1. Check host_exe: auto-extract if missing or 0 bytes
+        // First check if LTK Manager has a newer delivered patcher DLL in %APPDATA%\dev.leaguetoolkit.manager\patcher
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            let ltk_patcher_root = PathBuf::from(appdata).join("dev.leaguetoolkit.manager").join("patcher");
+            if ltk_patcher_root.exists() {
+                if let Ok(entries) = std::fs::read_dir(&ltk_patcher_root) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            let candidate_dll = path.join("ltk_patcher_dll.dll");
+                            if candidate_dll.exists() {
+                                if let Ok(cand_meta) = std::fs::metadata(&candidate_dll) {
+                                    let local_len = std::fs::metadata(&hook_dll).map(|m| m.len()).unwrap_or(0);
+                                    if cand_meta.len() != local_len && cand_meta.len() > 1000 {
+                                        info!("Importing newer patcher DLL from LTK Manager cache: {:?}", candidate_dll);
+                                        let _ = std::fs::copy(&candidate_dll, &hook_dll);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 1. Check host_exe: auto-extract if missing or different size from embedded binary
         let host_needs_extract = !host_exe.exists()
-            || std::fs::metadata(&host_exe).map(|m| m.len() < 1000).unwrap_or(true);
+            || std::fs::metadata(&host_exe)
+                .map(|m| m.len() != EMBEDDED_HOST_EXE.len() as u64)
+                .unwrap_or(true);
         if host_needs_extract {
-            info!("Auto-extracting embedded ltk_patcher_host.exe into {:?}", host_exe);
+            info!("Auto-extracting embedded ltk_patcher_host.exe ({} bytes) into {:?}", EMBEDDED_HOST_EXE.len(), host_exe);
             if let Err(e) = std::fs::write(&host_exe, EMBEDDED_HOST_EXE) {
                 warn!("Failed writing embedded host.exe: {}", e);
             }
         }
 
-        // 2. Check hook_dll: auto-extract if missing or 0 bytes
+        // 2. Check hook_dll: auto-extract if missing or smaller than embedded binary
         let dll_needs_extract = !hook_dll.exists()
-            || std::fs::metadata(&hook_dll).map(|m| m.len() < 1000).unwrap_or(true);
+            || std::fs::metadata(&hook_dll)
+                .map(|m| m.len() < EMBEDDED_HOOK_DLL.len() as u64)
+                .unwrap_or(true);
         if dll_needs_extract {
-            info!("Auto-extracting embedded ltk_patcher_dll.dll into {:?}", hook_dll);
+            info!("Auto-extracting embedded ltk_patcher_dll.dll ({} bytes) into {:?}", EMBEDDED_HOOK_DLL.len(), hook_dll);
             if let Err(e) = std::fs::write(&hook_dll, EMBEDDED_HOOK_DLL) {
                 warn!("Failed writing embedded hook.dll: {}", e);
             }
@@ -131,13 +159,13 @@ impl PatcherManager {
         let host_exe = patcher_dir.join("ltk_patcher_host.exe");
         let hook_dll = patcher_dir.join("ltk_patcher_dll.dll");
 
-        if !host_exe.exists() || std::fs::metadata(&host_exe).map(|m| m.len() < 1000).unwrap_or(true) {
+        if !host_exe.exists() || std::fs::metadata(&host_exe).map(|m| m.len() != EMBEDDED_HOST_EXE.len() as u64).unwrap_or(true) {
             info!("Writing embedded ltk_patcher_host.exe...");
             if std::fs::write(&host_exe, EMBEDDED_HOST_EXE).is_err() {
-                // Download fallback
+                // Download fallback from official project repository releases
                 info!("Downloading ltk_patcher_host.exe fallback...");
                 if let Ok(client) = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).build() {
-                    let url = "https://raw.githubusercontent.com/Alban1911/LeagueSkins/main/tools/ltk_patcher_host.exe";
+                    let url = "https://raw.githubusercontent.com/rintarou07/rintaroucloset/main/releases/patcher/ltk_patcher_host.exe";
                     if let Ok(resp) = client.get(url).send().await {
                         if resp.status().is_success() {
                             if let Ok(bytes) = resp.bytes().await {
@@ -149,13 +177,13 @@ impl PatcherManager {
             }
         }
 
-        if !hook_dll.exists() || std::fs::metadata(&hook_dll).map(|m| m.len() < 1000).unwrap_or(true) {
+        if !hook_dll.exists() || std::fs::metadata(&hook_dll).map(|m| m.len() < EMBEDDED_HOOK_DLL.len() as u64).unwrap_or(true) {
             info!("Writing embedded ltk_patcher_dll.dll...");
             if std::fs::write(&hook_dll, EMBEDDED_HOOK_DLL).is_err() {
-                // Download fallback
+                // Download fallback from official project repository releases
                 info!("Downloading ltk_patcher_dll.dll fallback...");
                 if let Ok(client) = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).build() {
-                    let url = "https://raw.githubusercontent.com/Alban1911/LeagueSkins/main/tools/ltk_patcher_dll.dll";
+                    let url = "https://raw.githubusercontent.com/rintarou07/rintaroucloset/main/releases/patcher/ltk_patcher_dll.dll";
                     if let Ok(resp) = client.get(url).send().await {
                         if resp.status().is_success() {
                             if let Ok(bytes) = resp.bytes().await {
@@ -364,6 +392,13 @@ impl PatcherManager {
                     updated_payload = Some(PatcherStatePayload {
                         status: PatcherStatus::Failed,
                         message: format!("Patcher DLL từ chối WAD: {}", trimmed),
+                        game_pid: None,
+                    });
+                } else if trimmed.contains("end of life reached") {
+                    warn!("Overlay patcher rejected due to EOL: {}", trimmed);
+                    updated_payload = Some(PatcherStatePayload {
+                        status: PatcherStatus::Failed,
+                        message: "Bản vá patcher đã hết hạn đối với phiên bản LMHT hiện tại! Vui lòng cập nhật bản mới từ app.".to_string(),
                         game_pid: None,
                     });
                 }
