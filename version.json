@@ -1,14 +1,13 @@
 {
-  "version": "0.1.5",
+  "version": "0.1.6",
   "min_required_version": "0.1.0",
   "release_date": "2026-11-08",
-  "title": "Bản cập nhật Rintarou Closet v0.1.5 - Tương thích Bản LMHT Mới Nhất",
+  "title": "Bản cập nhật Rintarou Closet v0.1.6 - Khắc phục Lỗi Chặn Skin Hack & Host Verification",
   "changelog": [
-    "Cập nhật nhân Patcher ltk_patcher-30 và host v1.33.0 tương thích 100% với bản cập nhật mới nhất của Liên Minh Huyền Thoại",
-    "Khắc phục triệt để lỗi game detach ngay khi vào trận do DLL hết hạn (lỗi end of life reached / PE timestamp 0x6ae8ee09)",
-    "Nâng cấp cơ chế trích xuất tự động: Tự động ghi đè và làm mới bộ patcher khi app có bản mới thay vì giữ lại file cũ",
-    "Tích hợp đồng bộ tự động từ cache của LTK Manager và nguồn lưu trữ GitHub chính thức",
-    "Bổ sung thông báo trực quan khi phát hiện bản vá patcher cần cập nhật"
+    "Bật cờ DISABLE_VERIFY (flags 13): Bỏ qua triệt để cơ chế Host Signature Verification [VRF00000008] của nhân patcher",
+    "Kết hợp cùng cờ OPT_OUT_AH_V1 và FULL_WAD_SCAN để vượt qua cơ chế chặn Anti-Skinhack v1 đối với skin thay thế",
+    "Đảm bảo 100% overlay WAD được nạp thành công vào tiến trình Liên Minh Huyền Thoại",
+    "Bổ sung nhận diện và xử lý lỗi chi tiết khi DLL từ chối overlay"
   ],
   "download_url": "https://raw.githubusercontent.com/rintarou07/rintaroucloset/main/releases/Rintarou-Closet.exe",
   "direct_exe_url": "https://raw.githubusercontent.com/rintarou07/rintaroucloset/main/releases/Rintarou-Closet.exe",

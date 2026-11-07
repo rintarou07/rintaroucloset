@@ -252,9 +252,11 @@ impl PatcherManager {
         }
 
         // Configure host session via stdin line protocol:
-        // Set flags with OPT_OUT_AH_V1 (4) | FULL_WAD_SCAN (8) = 12
-        // to bypass anti-skinhack v1 blocking enforcement and enable custom/remodeled skins.
-        let flags = hook_flags::OPT_OUT_AH_V1 | hook_flags::FULL_WAD_SCAN;
+        // Set flags with DISABLE_VERIFY (1) | OPT_OUT_AH_V1 (4) | FULL_WAD_SCAN (8) = 13
+        // - DISABLE_VERIFY (1): Bypasses host verification check [VRF00000008] allowing third-party client injection
+        // - OPT_OUT_AH_V1 (4): Bypasses Anti-Skinhack v1 blocking for custom/remodel skins
+        // - FULL_WAD_SCAN (8): Enables full scanning of WAD chunk files
+        let flags = hook_flags::DISABLE_VERIFY | hook_flags::OPT_OUT_AH_V1 | hook_flags::FULL_WAD_SCAN;
         let config_lines = [
             "config loglevel 32".to_string(),
             format!("config flags {}", flags),
@@ -387,7 +389,10 @@ impl PatcherManager {
                         message: format!("Đã nạp file skin thành công: {}", wad_name),
                         game_pid: cur_pid,
                     });
-                } else if trimmed.contains("overlay verification failed") {
+                } else if trimmed.contains("overlay verification failed")
+                    || trimmed.contains("refusing overlay")
+                    || trimmed.contains("host verification failed")
+                {
                     warn!("Overlay rejected by patcher DLL: {}", trimmed);
                     updated_payload = Some(PatcherStatePayload {
                         status: PatcherStatus::Failed,
