@@ -1,16 +1,16 @@
 {
-  "version": "0.1.6",
+  "version": "0.1.7",
   "min_required_version": "0.1.0",
   "release_date": "2026-11-08",
-  "title": "Bản cập nhật Rintarou Closet v0.1.6 - Khắc phục Lỗi Chặn Skin Hack & Host Verification",
+  "title": "Bản cập nhật Rintarou Closet v0.1.7 - Bypass Triệt Để Lỗi Chặn Skin [VRF00000008]",
   "changelog": [
-    "Bật cờ DISABLE_VERIFY (flags 13): Bỏ qua triệt để cơ chế Host Signature Verification [VRF00000008] của nhân patcher",
-    "Kết hợp cùng cờ OPT_OUT_AH_V1 và FULL_WAD_SCAN để vượt qua cơ chế chặn Anti-Skinhack v1 đối với skin thay thế",
-    "Đảm bảo 100% overlay WAD được nạp thành công vào tiến trình Liên Minh Huyền Thoại",
-    "Bổ sung nhận diện và xử lý lỗi chi tiết khi DLL từ chối overlay"
+    "Bypass triệt để cơ chế Host Verification [VRF00000008] trong ltk_patcher_dll.dll",
+    "Ngăn chặn trạng thái refusing overlay do kiểm tra chữ ký số Natoken LLC / ltk-manager.exe",
+    "Tự động đồng bộ WAD overlay sang profile LTK Manager (%APPDATA%\\dev.leaguetoolkit.manager)",
+    "Đảm bảo skin mod được nạp và hiển thị 100% trong trận đấu"
   ],
   "download_url": "https://raw.githubusercontent.com/rintarou07/rintaroucloset/main/releases/Rintarou-Closet.exe",
   "direct_exe_url": "https://raw.githubusercontent.com/rintarou07/rintaroucloset/main/releases/Rintarou-Closet.exe",
-  "patcher_version": "ltk_patcher-30",
+  "patcher_version": "ltk_patcher-30-unlocked",
   "patcher_url": "https://raw.githubusercontent.com/rintarou07/rintaroucloset/main/releases/patcher/ltk_patcher_dll.dll"
 }

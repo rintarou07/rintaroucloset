@@ -372,6 +372,9 @@ impl ModEngine {
             .build()
             .map_err(|e| format!("Overlay build failed: {}", e))?;
 
+        // Synchronize overlay to LTK Manager default profile overlay if present
+        Self::sync_to_ltk_manager(&paths.overlay_dir);
+
         let duration = start.elapsed().as_millis();
         info!(
             "Overlay build completed successfully in {} ms. Built: {} WADs, Reused: {} WADs.",
@@ -385,6 +388,41 @@ impl ModEngine {
             wads_reused: build_res.wads_reused.len(),
             duration_ms: duration,
         })
+    }
+
+    /// Synchronizes overlay files to LTK Manager profile directory if installed.
+    fn sync_to_ltk_manager(src_overlay: &Path) {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            let ltk_overlay = PathBuf::from(appdata)
+                .join("dev.leaguetoolkit.manager")
+                .join("profiles")
+                .join("default")
+                .join("overlay");
+            if ltk_overlay.parent().map(|p| p.exists()).unwrap_or(false) {
+                let _ = fs::create_dir_all(&ltk_overlay);
+                let _ = Self::copy_recursive(src_overlay, &ltk_overlay);
+            }
+        }
+    }
+
+    fn copy_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+        if !src.exists() {
+            return Ok(());
+        }
+        if src.is_dir() {
+            fs::create_dir_all(dst)?;
+            for entry in fs::read_dir(src)? {
+                let entry = entry?;
+                let file_type = entry.file_type()?;
+                let dest_child = dst.join(entry.file_name());
+                if file_type.is_dir() {
+                    let _ = Self::copy_recursive(&entry.path(), &dest_child);
+                } else {
+                    let _ = fs::copy(entry.path(), dest_child);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Wipes all files and subfolders inside `./data/overlay/`.
@@ -401,6 +439,24 @@ impl ModEngine {
                 let _ = fs::remove_dir_all(&path);
             } else {
                 let _ = fs::remove_file(&path);
+            }
+        }
+        // Also wipe LTK Manager overlay if present
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            let ltk_overlay = PathBuf::from(appdata)
+                .join("dev.leaguetoolkit.manager")
+                .join("profiles")
+                .join("default")
+                .join("overlay");
+            if ltk_overlay.exists() {
+                for entry in fs::read_dir(&ltk_overlay).into_iter().flatten().flatten() {
+                    let p = entry.path();
+                    if p.is_dir() {
+                        let _ = fs::remove_dir_all(&p);
+                    } else {
+                        let _ = fs::remove_file(&p);
+                    }
+                }
             }
         }
         Ok(())
