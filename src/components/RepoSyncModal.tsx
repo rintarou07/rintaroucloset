@@ -46,7 +46,7 @@ export const RepoSyncModal: React.FC<RepoSyncModalProps> = ({
     ? progress.total_files
     : (repoStatus?.total_files && repoStatus.total_files > 0)
     ? repoStatus.total_files
-    : 10939;
+    : 9136;
   const cachedFiles = progress?.downloaded_files !== undefined && progress.downloaded_files > 0
     ? progress.downloaded_files
     : repoStatus?.cached_files ?? 0;

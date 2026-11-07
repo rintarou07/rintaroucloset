@@ -1,6 +1,6 @@
 [package]
 name = "hextech-skin-client"
-version = "0.1.8"
+version = "0.1.9"
 description = "High-Performance 100% Portable League of Legends Custom Skin Client"
 authors = ["Hextech Systems Architect"]
 edition = "2021"

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tauri::{AppHandle, Emitter};
@@ -201,13 +202,21 @@ impl PatcherManager {
     ) -> Result<PatcherStatePayload, String> {
         let mut session_guard = self.session.lock().unwrap();
 
-        // If already running and process is still alive, return current status
+        // If already running and process is still alive:
+        // If it's healthy, return current status.
+        // If it previously failed or stopped, terminate child cleanly so we can start fresh.
         if let Some(ref mut sess) = *session_guard {
             if let Ok(None) = sess.child.try_wait() {
-                let status = sess.status.lock().unwrap().clone();
-                return Ok(status);
+                let cur_status = sess.status.lock().unwrap().status;
+                if cur_status != PatcherStatus::Failed && cur_status != PatcherStatus::Stopped {
+                    let status = sess.status.lock().unwrap().clone();
+                    return Ok(status);
+                }
             }
+            let _ = sess.child.kill();
+            let _ = sess.child.wait();
         }
+        *session_guard = None;
 
         let (host_exe, _) = Self::verify_binaries(patcher_dir)?;
 
@@ -294,6 +303,8 @@ impl PatcherManager {
         let handle_clone = app_handle.clone();
         let log_path = log_file_path.clone();
         let stdin_for_reader = Arc::clone(&stdin_arc);
+        let retry_counter = Arc::new(AtomicUsize::new(0));
+        let retry_counter_clone = Arc::clone(&retry_counter);
 
         thread::spawn(move || {
             use std::fs::OpenOptions;
@@ -340,31 +351,43 @@ impl PatcherManager {
                                 None,
                             ),
                             "injected" => {
+                                retry_counter_clone.store(0, Ordering::SeqCst);
                                 // Extract PID if present
                                 let pid = parts.iter().find_map(|p| p.parse::<u32>().ok());
                                 (PatcherStatus::Injected, pid)
                             }
                             "waiting" => {
+                                retry_counter_clone.store(0, Ordering::SeqCst);
                                 let cur_pid = status_clone.lock().unwrap().game_pid;
                                 (PatcherStatus::Waiting, cur_pid)
                             }
-                            "exited" => (PatcherStatus::Exited, None),
+                            "exited" => {
+                                retry_counter_clone.store(0, Ordering::SeqCst);
+                                (PatcherStatus::Exited, None)
+                            }
                             "failed" => {
                                 if message.contains("SetWindowsHookEx failed")
                                     || message.contains("session already in progress")
                                     || message.contains("failed to load hook dll")
                                 {
-                                    warn!("Transient hook scan failure: {}. Scheduling auto-retry scan in 500ms...", message);
-                                    let stdin_retry = Arc::clone(&stdin_for_reader);
-                                    thread::spawn(move || {
-                                        thread::sleep(std::time::Duration::from_millis(500));
-                                        if let Ok(mut lock) = stdin_retry.lock() {
-                                            let _ = writeln!(lock, "start scan");
-                                            let _ = lock.flush();
-                                            info!("Re-sent 'start scan' retry to patcher host");
-                                        }
-                                    });
-                                    (PatcherStatus::Scanning, None)
+                                    let current_retry = retry_counter_clone.fetch_add(1, Ordering::SeqCst);
+                                    if current_retry < 3 {
+                                        let delay_ms = (current_retry as u64 + 1) * 1500;
+                                        warn!("Transient hook scan failure (attempt {}/3): {}. Scheduling retry scan in {}ms...", current_retry + 1, message, delay_ms);
+                                        let stdin_retry = Arc::clone(&stdin_for_reader);
+                                        thread::spawn(move || {
+                                            thread::sleep(std::time::Duration::from_millis(delay_ms));
+                                            if let Ok(mut lock) = stdin_retry.lock() {
+                                                let _ = writeln!(lock, "start scan");
+                                                let _ = lock.flush();
+                                                info!("Re-sent 'start scan' retry to patcher host (attempt {})", current_retry + 1);
+                                            }
+                                        });
+                                        (PatcherStatus::Scanning, None)
+                                    } else {
+                                        warn!("Hook retry limit reached (3 attempts). Halting retry loop to avoid spam: {}", message);
+                                        (PatcherStatus::Failed, None)
+                                    }
                                 } else {
                                     (PatcherStatus::Failed, None)
                                 }
@@ -390,7 +413,11 @@ impl PatcherManager {
                                 "Trận đấu đã kết thúc. Tiếp tục đợi trận mới...".to_string()
                             }
                             PatcherStatus::Failed => {
-                                format!("Lỗi kết nối patcher: {}", message)
+                                if message.contains("SetWindowsHookEx failed") {
+                                    "Không thể kết nối vào trận đấu đang chạy (game đã qua giai đoạn nạp ban đầu hoặc Riot Client chạy quyền Admin). Hãy mở Rintarou Closet TRƯỚC KHI vào trận (ở sảnh hoặc chọn tướng)!".to_string()
+                                } else {
+                                    format!("Lỗi kết nối patcher: {}", message)
+                                }
                             }
                             _ => message,
                         };

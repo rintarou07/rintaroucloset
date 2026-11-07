@@ -341,6 +341,9 @@ impl MetadataManager {
                 if let Ok(manifest) = serde_json::from_str::<ManifestResponse>(&content) {
                     let mut map: HashMap<u32, u64> = HashMap::new();
                     for ManifestFileItem(path, _, size) in &manifest.files {
+                        if !path.starts_with("skins/") {
+                            continue;
+                        }
                         let p_lower = path.to_lowercase();
                         if p_lower.ends_with(".fantome") || p_lower.ends_with(".zip") || p_lower.ends_with(".wad.client") {
                             if let Some(filename) = path.rsplit('/').next() {
@@ -384,7 +387,21 @@ impl MetadataManager {
     ) -> Result<ManifestResponse, String> {
         let manifest_file = paths.metadata_dir.join("manifest.json");
 
-        if !force_refresh && manifest_file.exists() {
+        let is_stale = if let Ok(meta) = fs::metadata(&manifest_file) {
+            if let Ok(modified) = meta.modified() {
+                if let Ok(elapsed) = modified.elapsed() {
+                    elapsed.as_secs() > 2 * 3600 // Check remote manifest every 2 hours
+                } else {
+                    true
+                }
+            } else {
+                true
+            }
+        } else {
+            true
+        };
+
+        if !force_refresh && !is_stale && manifest_file.exists() {
             if let Ok(content) = fs::read_to_string(&manifest_file) {
                 if let Ok(parsed) = serde_json::from_str::<ManifestResponse>(&content) {
                     return Ok(parsed);
@@ -547,6 +564,9 @@ impl MetadataManager {
 
         if let Ok(manifest) = manifest_res {
             for ManifestFileItem(path, _sha, size) in &manifest.files {
+                if !path.starts_with("skins/") {
+                    continue;
+                }
                 let path_lower = path.to_lowercase();
                 if path_lower.ends_with(".fantome") || path_lower.ends_with(".zip") || path_lower.ends_with(".wad.client") {
                     let safe_path = path
@@ -979,7 +999,22 @@ impl MetadataManager {
     /// If not cached yet, triggers an initial sync.
     pub async fn get_catalog(paths: &PortablePaths) -> Result<Vec<ChampionItem>, String> {
         let catalog_cache_file = paths.metadata_dir.join("catalog_cache.json");
-        if catalog_cache_file.exists() {
+
+        let is_stale = if let Ok(meta) = fs::metadata(&catalog_cache_file) {
+            if let Ok(modified) = meta.modified() {
+                if let Ok(elapsed) = modified.elapsed() {
+                    elapsed.as_secs() > 6 * 3600 // Auto-refresh catalog if older than 6 hours
+                } else {
+                    true
+                }
+            } else {
+                true
+            }
+        } else {
+            true
+        };
+
+        if !is_stale && catalog_cache_file.exists() {
             if let Ok(content) = fs::read_to_string(&catalog_cache_file) {
                 if let Ok(mut catalog) = serde_json::from_str::<Vec<ChampionItem>>(&content) {
                     // FIX 1: Filter out Jade_, Ruby_, Strawberry_, non-standard duplicates & id: -1 dynamically

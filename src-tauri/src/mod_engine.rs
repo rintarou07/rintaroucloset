@@ -207,12 +207,6 @@ impl ModEngine {
             req.champion_id, req.skin_id
         ));
 
-        // 5. Classic folder (classic/{champ_id}/{skin_id}/{skin_id}.fantome)
-        candidate_urls.push(format!(
-            "https://raw.githubusercontent.com/Alban1911/LeagueSkins/main/classic/{}/{}/{}.fantome",
-            req.champion_id, req.skin_id, req.skin_id
-        ));
-
         let mut last_err = String::new();
         for url in &candidate_urls {
             info!("Attempting download of skin {} from candidate: {}", req.skin_id, url);
@@ -474,11 +468,34 @@ impl ModEngine {
         app_handle: Option<&AppHandle>,
     ) -> Result<ApplySkinResponse, String> {
         let fantome_file = paths.get_fantome_path(req.champion_id, req.skin_id);
-        let mut was_cached = paths.is_fantome_cached(req.champion_id, req.skin_id);
+        let mut needs_download = !fantome_file.exists();
 
-        if !was_cached {
+        if !needs_download {
+            // Check if cached file size matches repository manifest size for the current game patch
+            if let Some(expected_size) = crate::metadata::MetadataManager::get_manifest_size(req.skin_id, &paths.metadata_dir) {
+                if expected_size > 0 {
+                    if let Ok(meta) = fs::metadata(&fantome_file) {
+                        if meta.len() != expected_size {
+                            info!(
+                                "Cached fantome for skin {} is outdated ({} bytes != expected {} bytes). Redownloading for updated patch...",
+                                req.skin_id, meta.len(), expected_size
+                            );
+                            let _ = fs::remove_file(&fantome_file);
+                            let mod_extract_dir = paths.mods_dir.join(req.skin_id.to_string());
+                            if mod_extract_dir.exists() {
+                                let _ = fs::remove_dir_all(&mod_extract_dir);
+                            }
+                            needs_download = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        let was_cached = !needs_download;
+
+        if needs_download {
             ModEngine::download_fantome_with_fallback(&req, &fantome_file, app_handle).await?;
-            was_cached = true;
         }
 
         // Extract mod package for record/tools

@@ -1,14 +1,14 @@
 {
-  "version": "0.1.8",
+  "version": "0.1.9",
   "min_required_version": "0.1.0",
   "release_date": "2026-11-08",
-  "title": "Bản cập nhật Rintarou Closet v0.1.8 - Fix Lỗi Kết Nối Patcher & Auto Retry Hook",
+  "title": "Bản cập nhật Rintarou Closet v0.1.9 - Fix Toàn Diện Kho Skin 16.22 & Tránh Treo Hook",
   "changelog": [
-    "Cơ chế tự động thử lại (Auto-Retry Scan) khi SetWindowsHookEx gặp lỗi thời gian khởi tạo",
-    "Bảo đảm ltk_patcher_dll.dll đã patch chống [VRF00000008] luôn được trích xuất và đồng bộ 100%",
-    "Bổ sung tải ltk_patcher_dll.dll song song trong tính năng 1-Click Cập Nhật",
-    "Loại bỏ xung đột cache DLL cũ từ LTK Manager",
-    "Đảm bảo trang phục mod (Aatrox Huyết Nguyệt Hàng Hiệu,...) hoạt động mượt mà trong trận"
+    "Sửa lỗi quét kho skin: Lọc bỏ thư mục classic, đồng bộ chuẩn xác 9.136 trang phục LMHT 16.22",
+    "Tự động phát hiện và tải lại trang phục bản mới khi kích hoạt nếu phát hiện dung lượng không khớp bản vá",
+    "Khắc phục triệt để lỗi treo lặp vô tận SetWindowsHookEx (auto-retry giới hạn 3 lần với backoff thông minh)",
+    "Sửa lỗi ghi đè file trên Windows (atomic replace) khi cập nhật các skin cũ đã lưu về local",
+    "Tự động làm mới cache manifest.json và catalog_cache.json định kỳ thay vì lưu vĩnh viễn"
   ],
   "download_url": "https://raw.githubusercontent.com/rintarou07/rintaroucloset/main/releases/Rintarou-Closet.exe",
   "direct_exe_url": "https://raw.githubusercontent.com/rintarou07/rintaroucloset/main/releases/Rintarou-Closet.exe",

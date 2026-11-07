@@ -100,6 +100,10 @@ impl BulkDownloadManager {
                 if let Ok(manifest) = serde_json::from_str::<crate::metadata::ManifestResponse>(&content) {
                     let mut entries = Vec::new();
                     for crate::metadata::ManifestFileItem(rel_path, _sha, size) in &manifest.files {
+                        // CRITICAL: Only include skins/ directory for modern League
+                        if !rel_path.starts_with("skins/") {
+                            continue;
+                        }
                         let p_lower = rel_path.to_lowercase();
                         if p_lower.ends_with(".fantome") || p_lower.ends_with(".zip") || p_lower.ends_with(".wad.client") {
                             let parts: Vec<&str> = rel_path.split('/').collect();
@@ -375,6 +379,10 @@ impl BulkDownloadManager {
                                     let tmp_path = dest_path.with_extension("fantome.tmp");
                                     if let Ok(mut f) = File::create(&tmp_path) {
                                         if f.write_all(&bytes).is_ok() {
+                                            drop(f);
+                                            if dest_path.exists() {
+                                                let _ = fs::remove_file(&dest_path);
+                                            }
                                             let _ = fs::rename(&tmp_path, &dest_path);
                                             return (task, true, bytes.len() as u64);
                                         }
