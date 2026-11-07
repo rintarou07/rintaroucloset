@@ -135,15 +135,11 @@ pub async fn ensure_skin_cached(
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
-    let fantome_file = state.paths.get_fantome_path(request.champion_id, request.skin_id);
-    if fantome_file.exists() {
-        if let Ok(meta) = std::fs::metadata(&fantome_file) {
-            if meta.len() > 1024 {
-                return Ok(true);
-            }
-        }
+    if state.paths.is_fantome_cached_and_valid(request.champion_id, request.skin_id) {
+        return Ok(true);
     }
 
+    let fantome_file = state.paths.get_fantome_path(request.champion_id, request.skin_id);
     ModEngine::download_fantome_with_fallback(&request, &fantome_file, Some(&app_handle)).await?;
     Ok(true)
 }

@@ -192,6 +192,7 @@ export function App() {
           if (payload.is_completed) {
             showToast("Đã đồng bộ xong toàn bộ kho trang phục!", "success");
             tauriClient.checkRepoStatus(false).then(setRepoStatus).catch(() => {});
+            tauriClient.getCatalog().then(setChampions).catch(() => {});
           }
         });
       } catch (err) {
@@ -528,12 +529,29 @@ export function App() {
   const handleCheckUpdate = async () => {
     setIsCheckingUpdate(true);
     try {
+      // 1. Force refresh metadata (pulls latest CDragon metadata & manifest.json)
+      await tauriClient.syncMetadata(true);
+
+      // 2. Refresh catalog in memory so UI displays new skins/chromas
+      const catalog = await tauriClient.getCatalog();
+      setChampions(catalog);
+
+      // 3. Force check repo status against manifest
       const updated = await tauriClient.checkRepoStatus(true);
       setRepoStatus(updated);
-      showToast(
-        `Cập nhật kho thành công! Có ${updated.total_files.toLocaleString()} trang phục (${updated.percentage}% đã tải).`,
-        "success"
-      );
+
+      const outdated = updated.outdated_files ?? 0;
+      if (outdated > 0 || updated.missing_files > 0) {
+        showToast(
+          `Kho có cập nhật: ${outdated > 0 ? `${outdated} skin phiên bản mới cần vá, ` : ""}${updated.missing_files} skin chưa tải!`,
+          "info"
+        );
+      } else {
+        showToast(
+          `Kho đã đồng bộ hoàn toàn! (${updated.total_files.toLocaleString()} trang phục chuẩn theo bản LMHT mới nhất).`,
+          "success"
+        );
+      }
     } catch (err) {
       console.error("Check repo update error:", err);
       showToast(typeof err === "string" ? err : "Lỗi kiểm tra cập nhật kho từ GitHub.", "error");

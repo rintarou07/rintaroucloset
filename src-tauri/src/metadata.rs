@@ -17,6 +17,12 @@ pub const URL_SKINS_VI: &str =
 pub const URL_SKINS_EN: &str =
     "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/skins.json";
 
+pub const URL_MANIFEST: &str =
+    "https://raw.githubusercontent.com/Alban1911/LeagueSkins/manifest/manifest.json";
+
+pub const URL_MANIFEST_FALLBACK: &str =
+    "https://raw.githubusercontent.com/Alban1911/LeagueSkins/main/manifest.json";
+
 pub const URL_GITHUB_TREE: &str =
     "https://api.github.com/repos/Alban1911/LeagueSkins/git/trees/main?recursive=1";
 
@@ -160,6 +166,21 @@ pub struct GitHubTreeResponse {
     pub truncated: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManifestFileItem(pub String, pub String, pub u64);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManifestResponse {
+    #[serde(default)]
+    pub version: Option<u32>,
+    #[serde(default)]
+    pub commit: Option<String>,
+    pub files: Vec<ManifestFileItem>,
+}
+
+pub static MANIFEST_SIZES: std::sync::RwLock<Option<HashMap<u32, u64>>> =
+    std::sync::RwLock::new(None);
+
 // ---------------------------------------------------------------------------
 // Unified Client Output Data Models
 // ---------------------------------------------------------------------------
@@ -283,7 +304,7 @@ pub struct MetadataManager;
 
 impl MetadataManager {
     /// Builds an HTTP client with proper User-Agent header for GitHub and CDragon.
-    fn make_http_client() -> Result<reqwest::Client, String> {
+    pub fn make_http_client() -> Result<reqwest::Client, String> {
         reqwest::Client::builder()
             .user_agent("HextechPortableClient/1.0 (Windows NT 10.0; Win64; x64)")
             .timeout(std::time::Duration::from_secs(30))
@@ -291,15 +312,146 @@ impl MetadataManager {
             .map_err(|e| format!("Không thể khởi tạo HTTP client: {}", e))
     }
 
+    /// Retrieves the expected file size in bytes for a given skin ID from the repo manifest.
+    pub fn get_manifest_size(skin_id: u32, metadata_dir: &std::path::Path) -> Option<u64> {
+        if let Ok(guard) = MANIFEST_SIZES.read() {
+            if let Some(ref map) = *guard {
+                return map.get(&skin_id).copied();
+            }
+        }
+
+        // Try to load manifest_sizes.json
+        let sizes_file = metadata_dir.join("manifest_sizes.json");
+        if sizes_file.exists() {
+            if let Ok(content) = fs::read_to_string(&sizes_file) {
+                if let Ok(map) = serde_json::from_str::<HashMap<u32, u64>>(&content) {
+                    let res = map.get(&skin_id).copied();
+                    if let Ok(mut guard) = MANIFEST_SIZES.write() {
+                        *guard = Some(map);
+                    }
+                    return res;
+                }
+            }
+        }
+
+        // Fallback: parse manifest.json if present
+        let manifest_file = metadata_dir.join("manifest.json");
+        if manifest_file.exists() {
+            if let Ok(content) = fs::read_to_string(&manifest_file) {
+                if let Ok(manifest) = serde_json::from_str::<ManifestResponse>(&content) {
+                    let mut map: HashMap<u32, u64> = HashMap::new();
+                    for ManifestFileItem(path, _, size) in &manifest.files {
+                        let p_lower = path.to_lowercase();
+                        if p_lower.ends_with(".fantome") || p_lower.ends_with(".zip") || p_lower.ends_with(".wad.client") {
+                            if let Some(filename) = path.rsplit('/').next() {
+                                let clean = filename
+                                    .trim_end_matches(".fantome")
+                                    .trim_end_matches(".zip")
+                                    .trim_end_matches(".wad.client");
+                                if let Ok(target_id) = clean.parse::<u32>() {
+                                    map.insert(target_id, *size);
+                                }
+                            }
+                        }
+                    }
+                    let res = map.get(&skin_id).copied();
+                    let _ = fs::write(&sizes_file, serde_json::to_string(&map).unwrap_or_default());
+                    if let Ok(mut guard) = MANIFEST_SIZES.write() {
+                        *guard = Some(map);
+                    }
+                    return res;
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Stores the parsed skin size map into memory and saves to `manifest_sizes.json`.
+    pub fn set_manifest_sizes(map: HashMap<u32, u64>, metadata_dir: &std::path::Path) {
+        let sizes_file = metadata_dir.join("manifest_sizes.json");
+        let _ = fs::write(&sizes_file, serde_json::to_string(&map).unwrap_or_default());
+        if let Ok(mut guard) = MANIFEST_SIZES.write() {
+            *guard = Some(map);
+        }
+    }
+
+    /// Fetches the latest Alban1911 skin manifest from CDN with automatic local caching.
+    pub async fn fetch_manifest(
+        client: &reqwest::Client,
+        paths: &PortablePaths,
+        force_refresh: bool,
+    ) -> Result<ManifestResponse, String> {
+        let manifest_file = paths.metadata_dir.join("manifest.json");
+
+        if !force_refresh && manifest_file.exists() {
+            if let Ok(content) = fs::read_to_string(&manifest_file) {
+                if let Ok(parsed) = serde_json::from_str::<ManifestResponse>(&content) {
+                    return Ok(parsed);
+                }
+            }
+        }
+
+        info!("Fetching latest skin repository manifest from Alban1911 CDN...");
+        let urls = [URL_MANIFEST, URL_MANIFEST_FALLBACK];
+        for url in urls {
+            match client.get(url).send().await {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        if let Ok(text) = resp.text().await {
+                            if let Ok(parsed) = serde_json::from_str::<ManifestResponse>(&text) {
+                                let _ = fs::write(&manifest_file, &text);
+                                info!(
+                                    "Successfully loaded Alban1911 manifest: {} files (commit: {:?})",
+                                    parsed.files.len(),
+                                    parsed.commit
+                                );
+                                return Ok(parsed);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Network request to {} failed: {}", url, e);
+                }
+            }
+        }
+
+        if manifest_file.exists() {
+            if let Ok(content) = fs::read_to_string(&manifest_file) {
+                if let Ok(parsed) = serde_json::from_str::<ManifestResponse>(&content) {
+                    warn!("Using cached manifest.json after network fallback");
+                    return Ok(parsed);
+                }
+            }
+        }
+
+        Err("Không thể tải danh mục manifest.json từ kho skin Alban1911.".to_string())
+    }
+
     /// Fetches JSON data from remote URL and caches it to the portable metadata directory.
-    /// If network is unavailable or cached file exists and force_refresh is false, reads from cache.
+    /// Re-checks if cache is older than 6 hours or force_refresh is true.
     async fn fetch_or_cache<T: for<'de> Deserialize<'de> + Serialize>(
         client: &reqwest::Client,
         url: &str,
         cache_path: &std::path::Path,
         force_refresh: bool,
     ) -> Result<T, String> {
-        if !force_refresh && cache_path.exists() {
+        let is_stale = if let Ok(meta) = fs::metadata(cache_path) {
+            if let Ok(modified) = meta.modified() {
+                if let Ok(elapsed) = modified.elapsed() {
+                    elapsed.as_secs() > 6 * 3600 // older than 6 hours
+                } else {
+                    true
+                }
+            } else {
+                true
+            }
+        } else {
+            true
+        };
+
+        if !force_refresh && !is_stale && cache_path.exists() {
             if let Ok(content) = fs::read_to_string(cache_path) {
                 if let Ok(parsed) = serde_json::from_str::<T>(&content) {
                     return Ok(parsed);
@@ -374,9 +526,8 @@ impl MetadataManager {
         let raw_skins_en: HashMap<String, RawSkin> =
             Self::fetch_or_cache(&client, URL_SKINS_EN, &skins_en_file, force_refresh).await?;
 
-        // 4. Fetch GitHub Tree from Alban1911/LeagueSkins
-        let github_tree: GitHubTreeResponse =
-            Self::fetch_or_cache(&client, URL_GITHUB_TREE, &tree_file, force_refresh).await?;
+        // 4. Fetch Manifest from Alban1911/LeagueSkins
+        let manifest_res = Self::fetch_manifest(&client, paths, force_refresh).await;
 
         // Build set of all known chroma IDs from CDragon so we can distinguish chromas from skin stages
         let mut all_chroma_ids: HashSet<u32> = HashSet::new();
@@ -388,50 +539,102 @@ impl MetadataManager {
             }
         }
 
-        // Build index of GitHub .fantome and .zip paths
+        // Build index of GitHub .fantome paths and expected sizes
         let mut fantome_by_id: HashMap<u32, String> = HashMap::new();
         let mut fantome_by_key: HashMap<String, String> = HashMap::new();
+        let mut fantome_size_by_id: HashMap<u32, u64> = HashMap::new();
         let mut sub_stages_by_parent: HashMap<u32, Vec<(u32, String)>> = HashMap::new();
 
-        for item in &github_tree.tree {
-            let path_lower = item.path.to_lowercase();
-            if path_lower.ends_with(".fantome") || path_lower.ends_with(".zip") || path_lower.ends_with(".wad.client") {
-                let encoded_path = urlencoding::encode(&item.path);
-                let download_url = format!(
-                    "https://raw.githubusercontent.com/Alban1911/LeagueSkins/main/{}",
-                    encoded_path
-                );
+        if let Ok(manifest) = manifest_res {
+            for ManifestFileItem(path, _sha, size) in &manifest.files {
+                let path_lower = path.to_lowercase();
+                if path_lower.ends_with(".fantome") || path_lower.ends_with(".zip") || path_lower.ends_with(".wad.client") {
+                    let safe_path = path
+                        .split('/')
+                        .map(|seg| urlencoding::encode(seg).to_string())
+                        .collect::<Vec<_>>()
+                        .join("/");
+                    let download_url = format!(
+                        "https://raw.githubusercontent.com/Alban1911/LeagueSkins/main/{}",
+                        safe_path
+                    );
 
-                // Index 1: By the TARGET ID extracted strictly from the filename itself
-                if let Some(filename) = item.path.rsplit('/').next() {
-                    let clean_filename = filename
-                        .trim_end_matches(".fantome")
-                        .trim_end_matches(".zip")
-                        .trim_end_matches(".wad.client");
-                    if let Ok(target_id) = clean_filename.parse::<u32>() {
-                        fantome_by_id.insert(target_id, download_url.clone());
-                        fantome_by_key.insert(target_id.to_string(), download_url.clone());
+                    // Extract TARGET ID from filename
+                    if let Some(filename) = path.rsplit('/').next() {
+                        let clean_filename = filename
+                            .trim_end_matches(".fantome")
+                            .trim_end_matches(".zip")
+                            .trim_end_matches(".wad.client");
+                        if let Ok(target_id) = clean_filename.parse::<u32>() {
+                            fantome_by_id.insert(target_id, download_url.clone());
+                            fantome_by_key.insert(target_id.to_string(), download_url.clone());
+                            fantome_size_by_id.insert(target_id, *size);
+                        }
+
+                        let normalized_key: String = clean_filename
+                            .to_lowercase()
+                            .chars()
+                            .filter(|c| c.is_alphanumeric())
+                            .collect();
+                        if !normalized_key.is_empty() {
+                            fantome_by_key.insert(normalized_key, download_url.clone());
+                        }
                     }
 
-                    let normalized_key: String = clean_filename
-                        .to_lowercase()
-                        .chars()
-                        .filter(|c| c.is_alphanumeric())
-                        .collect();
-                    if !normalized_key.is_empty() {
-                        fantome_by_key.insert(normalized_key, download_url.clone());
-                    }
-                }
-
-                // Index 2: Detect nested sub-stages (e.g. skins/103/103085/103086/103086.fantome)
-                let parts: Vec<&str> = item.path.split('/').collect();
-                if parts.len() == 5 && parts[0] == "skins" {
-                    if let (Ok(parent_id), Ok(sub_id)) = (parts[2].parse::<u32>(), parts[3].parse::<u32>()) {
-                        if sub_id != parent_id && !all_chroma_ids.contains(&sub_id) {
-                            sub_stages_by_parent.entry(parent_id).or_default().push((sub_id, download_url));
+                    // Detect nested sub-stages (e.g. skins/103/103085/103086/103086.fantome)
+                    let parts: Vec<&str> = path.split('/').collect();
+                    if parts.len() == 5 && parts[0] == "skins" {
+                        if let (Ok(parent_id), Ok(sub_id)) = (parts[2].parse::<u32>(), parts[3].parse::<u32>()) {
+                            if sub_id != parent_id && !all_chroma_ids.contains(&sub_id) {
+                                sub_stages_by_parent.entry(parent_id).or_default().push((sub_id, download_url));
+                            }
                         }
                     }
                 }
+            }
+
+            Self::set_manifest_sizes(fantome_size_by_id, &paths.metadata_dir);
+        } else {
+            warn!("Failed to load manifest.json; trying fallback github_tree.json");
+            if let Ok(github_tree) = Self::fetch_or_cache::<GitHubTreeResponse>(&client, URL_GITHUB_TREE, &tree_file, force_refresh).await {
+                for item in &github_tree.tree {
+                    let path_lower = item.path.to_lowercase();
+                    if path_lower.ends_with(".fantome") || path_lower.ends_with(".zip") || path_lower.ends_with(".wad.client") {
+                        let safe_path = item.path
+                            .split('/')
+                            .map(|seg| urlencoding::encode(seg).to_string())
+                            .collect::<Vec<_>>()
+                            .join("/");
+                        let download_url = format!(
+                            "https://raw.githubusercontent.com/Alban1911/LeagueSkins/main/{}",
+                            safe_path
+                        );
+
+                        if let Some(filename) = item.path.rsplit('/').next() {
+                            let clean_filename = filename
+                                .trim_end_matches(".fantome")
+                                .trim_end_matches(".zip")
+                                .trim_end_matches(".wad.client");
+                            if let Ok(target_id) = clean_filename.parse::<u32>() {
+                                fantome_by_id.insert(target_id, download_url.clone());
+                                fantome_by_key.insert(target_id.to_string(), download_url.clone());
+                                if let Some(sz) = item.size {
+                                    fantome_size_by_id.insert(target_id, sz);
+                                }
+                            }
+                        }
+
+                        let parts: Vec<&str> = item.path.split('/').collect();
+                        if parts.len() == 5 && parts[0] == "skins" {
+                            if let (Ok(parent_id), Ok(sub_id)) = (parts[2].parse::<u32>(), parts[3].parse::<u32>()) {
+                                if sub_id != parent_id && !all_chroma_ids.contains(&sub_id) {
+                                    sub_stages_by_parent.entry(parent_id).or_default().push((sub_id, download_url));
+                                }
+                            }
+                        }
+                    }
+                }
+                Self::set_manifest_sizes(fantome_size_by_id, &paths.metadata_dir);
             }
         }
 

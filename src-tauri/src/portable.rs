@@ -205,10 +205,33 @@ impl PortablePaths {
             .join(format!("{}.fantome", skin_id))
     }
 
-    /// Checks if a .fantome file is already cached locally.
-    pub fn is_fantome_cached(&self, champion_id: u32, skin_id: u32) -> bool {
+    /// Checks if a .fantome file is already cached locally AND its size matches the repository manifest.
+    pub fn is_fantome_cached_and_valid(&self, champion_id: u32, skin_id: u32) -> bool {
         let p = self.get_fantome_path(champion_id, skin_id);
-        p.exists() && fs::metadata(&p).map(|m| m.len() > 0).unwrap_or(false)
+        if !p.exists() {
+            return false;
+        }
+
+        let local_len = match fs::metadata(&p) {
+            Ok(m) => m.len(),
+            Err(_) => return false,
+        };
+
+        if local_len < 100 {
+            return false;
+        }
+
+        // If manifest size is known for this skin, verify size match
+        if let Some(expected_size) = crate::metadata::MetadataManager::get_manifest_size(skin_id, &self.metadata_dir) {
+            return local_len == expected_size;
+        }
+
+        true
+    }
+
+    /// Checks if a .fantome file is already cached locally and matches repository manifest.
+    pub fn is_fantome_cached(&self, champion_id: u32, skin_id: u32) -> bool {
+        self.is_fantome_cached_and_valid(champion_id, skin_id)
     }
 
     /// Automatically detects League of Legends installation path.

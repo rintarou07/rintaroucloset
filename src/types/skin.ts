@@ -343,6 +343,7 @@ export interface RepoStatus {
   is_fully_synced: boolean;
   total_size_mb: number;
   is_downloading: boolean;
+  outdated_files?: number;
 }
 
 /**

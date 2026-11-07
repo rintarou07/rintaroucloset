@@ -238,6 +238,9 @@ impl ModEngine {
     /// Extracts a downloaded .fantome zip archive into `./data/mods/{skin_id}/` using `ltk_fantome`.
     pub fn extract_fantome(fantome_path: &Path, mods_dir: &Path, skin_id: u32) -> Result<PathBuf, String> {
         let dest_dir = mods_dir.join(skin_id.to_string());
+        if dest_dir.exists() {
+            let _ = fs::remove_dir_all(&dest_dir);
+        }
         fs::create_dir_all(&dest_dir)
             .map_err(|e| format!("Failed to create mod extraction folder {:?}: {}", dest_dir, e))?;
 

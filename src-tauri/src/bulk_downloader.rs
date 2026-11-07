@@ -19,6 +19,8 @@ pub struct RepoStatus {
     pub is_fully_synced: bool,
     pub total_size_mb: f64,
     pub is_downloading: bool,
+    #[serde(default)]
+    pub outdated_files: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +44,15 @@ struct GithubTreeItem {
 #[derive(Debug, Clone, Deserialize)]
 struct GithubTreeResponse {
     pub tree: Vec<GithubTreeItem>,
+}
+
+#[derive(Clone)]
+struct RepoItemEntry {
+    pub champ_id: u32,
+    pub target_id: u32,
+    pub relative_path: String,
+    pub download_url: String,
+    pub size: u64,
 }
 
 #[allow(dead_code)]
@@ -81,84 +92,164 @@ impl BulkDownloadManager {
         self.is_running.store(false, Ordering::Relaxed);
     }
 
-    /// Checks local cache coverage against `github_tree.json`.
-    /// If `force_remote_check` is true, re-fetches the latest tree from GitHub.
-    pub async fn check_repo_status(
-        &self,
-        paths: &PortablePaths,
-        force_remote_check: bool,
-    ) -> Result<RepoStatus, String> {
-        let tree_path = paths.metadata_dir.join("github_tree.json");
-
-        if force_remote_check || !tree_path.exists() {
-            info!("Fetching latest GitHub tree from Alban1911/LeagueSkins...");
-            let client = Client::builder()
-                .user_agent("HextechPortableClient/1.0")
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-
-            let resp = client
-                .get("https://api.github.com/repos/Alban1911/LeagueSkins/git/trees/main?recursive=1")
-                .send()
-                .await
-                .map_err(|e| format!("Failed to fetch GitHub tree: {}", e))?;
-
-            if resp.status().is_success() {
-                let bytes = resp
-                    .bytes()
-                    .await
-                    .map_err(|e| format!("Failed reading tree bytes: {}", e))?;
-                let _ = fs::write(&tree_path, bytes);
-            }
-        }
-
-        if !tree_path.exists() {
-            return Err("Chưa tải được danh mục cây thư mục kho skin.".to_string());
-        }
-
-        let tree_content = fs::read_to_string(&tree_path)
-            .map_err(|e| format!("Failed reading github_tree.json: {}", e))?;
-        let tree_data: GithubTreeResponse = serde_json::from_str(&tree_content)
-            .map_err(|e| format!("Failed parsing github_tree.json: {}", e))?;
-
-        let mut total_files = 0usize;
-        let mut cached_files = 0usize;
-        let mut total_bytes = 0u64;
-
-        for item in &tree_data.tree {
-            let p_lower = item.path.to_lowercase();
-            if item.path.starts_with("skins/")
-                && (p_lower.ends_with(".fantome") || p_lower.ends_with(".zip") || p_lower.ends_with(".wad.client"))
-            {
-                let parts: Vec<&str> = item.path.split('/').collect();
-                if parts.len() >= 3 {
-                    if let Ok(champ_id) = parts[1].parse::<u32>() {
-                        if let Some(filename) = parts.last() {
+    /// Loads all download targets from manifest.json (or fallback github_tree.json)
+    fn load_repo_entries(paths: &PortablePaths) -> Result<Vec<RepoItemEntry>, String> {
+        let manifest_path = paths.metadata_dir.join("manifest.json");
+        if manifest_path.exists() {
+            if let Ok(content) = fs::read_to_string(&manifest_path) {
+                if let Ok(manifest) = serde_json::from_str::<crate::metadata::ManifestResponse>(&content) {
+                    let mut entries = Vec::new();
+                    for crate::metadata::ManifestFileItem(rel_path, _sha, size) in &manifest.files {
+                        let p_lower = rel_path.to_lowercase();
+                        if p_lower.ends_with(".fantome") || p_lower.ends_with(".zip") || p_lower.ends_with(".wad.client") {
+                            let parts: Vec<&str> = rel_path.split('/').collect();
+                            let filename = match parts.last() {
+                                Some(f) => *f,
+                                None => continue,
+                            };
                             let clean = filename
                                 .trim_end_matches(".fantome")
                                 .trim_end_matches(".zip")
                                 .trim_end_matches(".wad.client");
-                            if let Ok(target_id) = clean.parse::<u32>() {
-                                total_files += 1;
-                                total_bytes += item.size.unwrap_or(0);
+                            let target_id = match clean.parse::<u32>() {
+                                Ok(id) => id,
+                                Err(_) => continue,
+                            };
 
-                                let local_path = paths.get_fantome_path(champ_id, target_id);
-                                if local_path.exists() {
-                                    if let Ok(meta) = fs::metadata(&local_path) {
-                                        if meta.len() > 100 {
-                                            cached_files += 1;
+                            let champ_id = if parts[0] == "skins" && parts.len() >= 2 {
+                                match parts[1].parse::<u32>() {
+                                    Ok(cid) => cid,
+                                    Err(_) => target_id / 1000,
+                                }
+                            } else {
+                                target_id / 1000
+                            };
+
+                            let safe_path = rel_path
+                                .split('/')
+                                .map(|seg| urlencoding::encode(seg).to_string())
+                                .collect::<Vec<_>>()
+                                .join("/");
+                            let download_url = format!(
+                                "https://raw.githubusercontent.com/Alban1911/LeagueSkins/main/{}",
+                                safe_path
+                            );
+
+                            entries.push(RepoItemEntry {
+                                champ_id,
+                                target_id,
+                                relative_path: rel_path.clone(),
+                                download_url,
+                                size: *size,
+                            });
+                        }
+                    }
+                    if !entries.is_empty() {
+                        return Ok(entries);
+                    }
+                }
+            }
+        }
+
+        // Fallback to github_tree.json
+        let tree_path = paths.metadata_dir.join("github_tree.json");
+        if tree_path.exists() {
+            if let Ok(content) = fs::read_to_string(&tree_path) {
+                if let Ok(tree_data) = serde_json::from_str::<GithubTreeResponse>(&content) {
+                    let mut entries = Vec::new();
+                    for item in &tree_data.tree {
+                        let p_lower = item.path.to_lowercase();
+                        if item.path.starts_with("skins/") && (p_lower.ends_with(".fantome") || p_lower.ends_with(".zip") || p_lower.ends_with(".wad.client")) {
+                            let parts: Vec<&str> = item.path.split('/').collect();
+                            if parts.len() >= 3 {
+                                if let Ok(champ_id) = parts[1].parse::<u32>() {
+                                    if let Some(filename) = parts.last() {
+                                        let clean = filename
+                                            .trim_end_matches(".fantome")
+                                            .trim_end_matches(".zip")
+                                            .trim_end_matches(".wad.client");
+                                        if let Ok(target_id) = clean.parse::<u32>() {
+                                            let safe_path = item.path
+                                                .split('/')
+                                                .map(|seg| urlencoding::encode(seg).to_string())
+                                                .collect::<Vec<_>>()
+                                                .join("/");
+                                            let download_url = format!(
+                                                "https://raw.githubusercontent.com/Alban1911/LeagueSkins/main/{}",
+                                                safe_path
+                                            );
+                                            entries.push(RepoItemEntry {
+                                                champ_id,
+                                                target_id,
+                                                relative_path: item.path.clone(),
+                                                download_url,
+                                                size: item.size.unwrap_or(0),
+                                            });
                                         }
                                     }
                                 }
                             }
                         }
                     }
+                    if !entries.is_empty() {
+                        return Ok(entries);
+                    }
                 }
             }
         }
 
-        let missing_files = total_files.saturating_sub(cached_files);
+        Err("Chưa tải được danh mục kho skin (manifest.json). Vui lòng bấm Kiểm tra cập nhật.".to_string())
+    }
+
+    /// Checks local cache coverage against `manifest.json`.
+    /// Accurately detects missing files and outdated files whose size does not match the latest repo manifest.
+    pub async fn check_repo_status(
+        &self,
+        paths: &PortablePaths,
+        force_remote_check: bool,
+    ) -> Result<RepoStatus, String> {
+        let manifest_path = paths.metadata_dir.join("manifest.json");
+
+        if force_remote_check || !manifest_path.exists() {
+            info!("Fetching latest manifest from Alban1911 CDN...");
+            let client = Client::builder()
+                .user_agent("HextechPortableClient/1.0")
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+            let _ = crate::metadata::MetadataManager::fetch_manifest(&client, paths, force_remote_check).await;
+        }
+
+        let entries = Self::load_repo_entries(paths)?;
+
+        let mut total_files = 0usize;
+        let mut cached_files = 0usize;
+        let mut outdated_files = 0usize;
+        let mut missing_files = 0usize;
+        let mut total_bytes = 0u64;
+
+        for entry in &entries {
+            total_files += 1;
+            total_bytes += entry.size;
+
+            let local_path = paths.get_fantome_path(entry.champ_id, entry.target_id);
+            if local_path.exists() {
+                if let Ok(meta) = fs::metadata(&local_path) {
+                    if meta.len() == entry.size && entry.size > 0 {
+                        cached_files += 1;
+                    } else {
+                        outdated_files += 1;
+                    }
+                } else {
+                    outdated_files += 1;
+                }
+            } else {
+                missing_files += 1;
+            }
+        }
+
+        let needed_files = missing_files + outdated_files;
         let pct = if total_files > 0 {
             (cached_files as f32 / total_files as f32) * 100.0
         } else {
@@ -168,15 +259,16 @@ impl BulkDownloadManager {
         Ok(RepoStatus {
             total_files,
             cached_files,
-            missing_files,
+            missing_files: needed_files,
             percentage: (pct * 10.0).round() / 10.0,
-            is_fully_synced: missing_files == 0,
+            is_fully_synced: needed_files == 0,
             total_size_mb: ((total_bytes as f64 / 1024.0 / 1024.0) * 10.0).round() / 10.0,
             is_downloading: self.is_running.load(Ordering::Relaxed),
+            outdated_files,
         })
     }
 
-    /// Starts multi-stream background download of all missing skins from Alban1911.
+    /// Starts multi-stream background download of all missing and outdated skins from Alban1911.
     pub async fn start_bulk_download(
         &self,
         paths: &PortablePaths,
@@ -186,77 +278,43 @@ impl BulkDownloadManager {
             return Ok(true); // Already running
         }
 
-        let tree_path = paths.metadata_dir.join("github_tree.json");
-        if !tree_path.exists() {
-            return Err("Không tìm thấy danh mục github_tree.json. Vui lòng bấm Check for Update.".to_string());
-        }
-
-        let tree_content = fs::read_to_string(&tree_path)
-            .map_err(|e| format!("Failed reading github_tree.json: {}", e))?;
-        let tree_data: GithubTreeResponse = serde_json::from_str(&tree_content)
-            .map_err(|e| format!("Failed parsing github_tree.json: {}", e))?;
+        let entries = Self::load_repo_entries(paths)?;
 
         let mut total_repo_files = 0usize;
         let mut cached_repo_files = 0usize;
         let mut tasks: Vec<DownloadTask> = Vec::new();
 
-        for item in &tree_data.tree {
-            let p_lower = item.path.to_lowercase();
-            if item.path.starts_with("skins/")
-                && (p_lower.ends_with(".fantome") || p_lower.ends_with(".zip") || p_lower.ends_with(".wad.client"))
-            {
-                let parts: Vec<&str> = item.path.split('/').collect();
-                if parts.len() >= 3 {
-                    if let Ok(champ_id) = parts[1].parse::<u32>() {
-                        if let Some(filename) = parts.last() {
-                            let clean = filename
-                                .trim_end_matches(".fantome")
-                                .trim_end_matches(".zip")
-                                .trim_end_matches(".wad.client");
-                            if let Ok(target_id) = clean.parse::<u32>() {
-                                total_repo_files += 1;
-                                let local_path = paths.get_fantome_path(champ_id, target_id);
-                                let is_cached = local_path.exists()
-                                    && fs::metadata(&local_path).map(|m| m.len() > 100).unwrap_or(false);
+        for entry in &entries {
+            total_repo_files += 1;
+            let local_path = paths.get_fantome_path(entry.champ_id, entry.target_id);
+            let is_up_to_date = if local_path.exists() {
+                fs::metadata(&local_path).map(|m| m.len() == entry.size && entry.size > 0).unwrap_or(false)
+            } else {
+                false
+            };
 
-                                if is_cached {
-                                    cached_repo_files += 1;
-                                } else {
-                                    // Properly URL-encode path segments while preserving '/' slashes
-                                    let safe_path = item
-                                        .path
-                                        .split('/')
-                                        .map(|seg| urlencoding::encode(seg).to_string())
-                                        .collect::<Vec<_>>()
-                                        .join("/");
-                                    let url = format!(
-                                        "https://raw.githubusercontent.com/Alban1911/LeagueSkins/main/{}",
-                                        safe_path
-                                    );
-                                    tasks.push(DownloadTask {
-                                        champion_id: champ_id,
-                                        target_id,
-                                        relative_path: item.path.clone(),
-                                        download_url: url,
-                                        size: item.size.unwrap_or(0),
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
+            if is_up_to_date {
+                cached_repo_files += 1;
+            } else {
+                tasks.push(DownloadTask {
+                    champion_id: entry.champ_id,
+                    target_id: entry.target_id,
+                    relative_path: entry.relative_path.clone(),
+                    download_url: entry.download_url.clone(),
+                    size: entry.size,
+                });
             }
         }
 
         let total_missing = tasks.len();
         if total_missing == 0 {
-            info!("All skins are already downloaded and cached.");
+            info!("All skins are already downloaded, up-to-date, and cached.");
             let _ = app_handle.emit(
                 "repo-download-progress",
                 BulkDownloadProgress {
                     total_files: total_repo_files,
                     downloaded_files: cached_repo_files,
-                    current_file: "Kho trang phục đã đầy đủ 100%".to_string(),
+                    current_file: "Kho trang phục đã đầy đủ 100% bản mới nhất".to_string(),
                     percentage: 100.0,
                     speed_kbps: 0.0,
                     is_completed: true,
@@ -355,7 +413,7 @@ impl BulkDownloadManager {
                     100.0
                 };
 
-                // Fast UI emits (every 100ms) for ultra-smooth live progress
+                // Fast UI emits (every 100ms) for smooth live progress
                 if last_progress_emit.elapsed().as_millis() > 100 || (current_done + current_fail >= total_missing) {
                     last_progress_emit = Instant::now();
                     let elapsed_secs = start_time.elapsed().as_secs_f64().max(0.1);
@@ -398,7 +456,7 @@ impl BulkDownloadManager {
                     current_file: if final_fail > 0 {
                         format!("Hoàn tất đồng bộ ({} file lỗi mạng)", final_fail)
                     } else {
-                        "Hoàn tất đồng bộ kho trang phục!".to_string()
+                        "Hoàn tất đồng bộ kho trang phục bản mới nhất!".to_string()
                     },
                     percentage: (final_pct * 10.0).round() / 10.0,
                     speed_kbps: 0.0,

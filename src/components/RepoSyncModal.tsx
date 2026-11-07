@@ -10,6 +10,7 @@ import {
   Pause,
   Play,
   Zap,
+  AlertTriangle,
 } from "lucide-react";
 import type { RepoStatus, BulkDownloadProgress } from "../types/skin";
 
@@ -39,12 +40,13 @@ export const RepoSyncModal: React.FC<RepoSyncModalProps> = ({
   if (!isOpen) return null;
 
   const isDownloading = progress?.is_active ?? repoStatus?.is_downloading ?? false;
-  const isCompleted = (progress?.is_completed || repoStatus?.is_fully_synced) && !isDownloading;
+  const outdatedFiles = repoStatus?.outdated_files ?? 0;
+  const isCompleted = (progress?.is_completed || (repoStatus?.is_fully_synced && outdatedFiles === 0)) && !isDownloading;
   const totalFiles = (progress?.total_files && progress.total_files > 0)
     ? progress.total_files
     : (repoStatus?.total_files && repoStatus.total_files > 0)
     ? repoStatus.total_files
-    : 9096;
+    : 10939;
   const cachedFiles = progress?.downloaded_files !== undefined && progress.downloaded_files > 0
     ? progress.downloaded_files
     : repoStatus?.cached_files ?? 0;
@@ -100,6 +102,19 @@ export const RepoSyncModal: React.FC<RepoSyncModalProps> = ({
 
           {/* Body Content */}
           <div className="p-5 space-y-4 text-xs">
+            {/* Outdated Patch Alert */}
+            {outdatedFiles > 0 && (
+              <div className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-200 leading-relaxed">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="text-amber-300 font-bold">Phát hiện {outdatedFiles.toLocaleString()} skin cần cập nhật!</strong>
+                  <p className="text-zinc-300 mt-0.5">
+                    Các file skin này thuộc phiên bản LMHT cũ. Hãy bấm nút <strong>"Cập nhật ngay"</strong> phía dưới để đồng bộ bản vá mới nhất, giúp trang phục hoạt động ổn định và không bị crash game.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Status Card */}
             <div className="grid grid-cols-3 gap-2.5">
               <div className="p-3 rounded-xl bg-[#1d1f21] border border-white/5 flex flex-col items-center text-center">
@@ -108,12 +123,12 @@ export const RepoSyncModal: React.FC<RepoSyncModalProps> = ({
                 <span className="text-sm font-bold text-white mt-0.5">
                   {totalFiles.toLocaleString()}
                 </span>
-                <span className="text-[9px] text-zinc-500">~{repoStatus?.total_size_mb || 140} MB</span>
+                <span className="text-[9px] text-zinc-500">~{repoStatus?.total_size_mb || 160} MB</span>
               </div>
 
               <div className="p-3 rounded-xl bg-[#1d1f21] border border-white/5 flex flex-col items-center text-center">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400 mb-1" />
-                <span className="text-[10px] text-zinc-400">Đã tải về máy</span>
+                <span className="text-[10px] text-zinc-400">Chuẩn bản mới</span>
                 <span className="text-sm font-bold text-emerald-400 mt-0.5">
                   {cachedFiles.toLocaleString()}
                 </span>
@@ -122,11 +137,11 @@ export const RepoSyncModal: React.FC<RepoSyncModalProps> = ({
 
               <div className="p-3 rounded-xl bg-[#1d1f21] border border-white/5 flex flex-col items-center text-center">
                 <Zap className="w-4 h-4 text-amber-400 mb-1" />
-                <span className="text-[10px] text-zinc-400">Còn thiếu</span>
+                <span className="text-[10px] text-zinc-400">Cần tải / vá</span>
                 <span className="text-sm font-bold text-amber-400 mt-0.5">
                   {missingFiles.toLocaleString()}
                 </span>
-                <span className="text-[9px] text-zinc-500">cần tải</span>
+                <span className="text-[9px] text-zinc-500">{outdatedFiles > 0 ? `gồm ${outdatedFiles} bản cũ` : "cần tải"}</span>
               </div>
             </div>
 
@@ -177,7 +192,7 @@ export const RepoSyncModal: React.FC<RepoSyncModalProps> = ({
 
               {isCompleted && (
                 <p className="text-[11px] text-zinc-400 leading-relaxed">
-                  Tất cả các trang phục từ kho skin đã được tải sẵn đầy đủ vào máy của bạn.
+                  Tất cả các trang phục từ kho skin đã được cập nhật chuẩn theo bản vá LMHT mới nhất.
                   Bất kỳ lúc nào bạn click chọn skin, app sẽ kích hoạt ngay lập tức (0ms).
                 </p>
               )}
@@ -187,9 +202,8 @@ export const RepoSyncModal: React.FC<RepoSyncModalProps> = ({
             <div className="flex items-start gap-2 p-3 rounded-lg bg-sky-500/10 border border-sky-500/20 text-[11px] text-sky-200/90 leading-relaxed">
               <Sparkles className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
               <span>
-                Toàn bộ 9,000+ trang phục của kho chỉ nặng khoảng <strong>~140 MB</strong>.
-                Bạn có thể bấm <strong>"Tải Toàn Bộ Kho"</strong> rồi tắt popup này, quá trình tải sẽ chạy
-                ngầm êm ái mà không làm đơ giao diện.
+                Toàn bộ hơn 10.000 trang phục của kho chỉ nặng khoảng <strong>~160 MB</strong>.
+                Hệ thống hỗ trợ tải song song siêu tốc qua GitHub Raw CDN (không bị bóp băng thông) và tự động ghi đè bản cũ khi có patch mới.
               </span>
             </div>
           </div>
@@ -202,7 +216,7 @@ export const RepoSyncModal: React.FC<RepoSyncModalProps> = ({
               className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#252729] hover:bg-[#2e3134] border border-white/10 text-xs font-semibold text-zinc-300 hover:text-white transition-colors disabled:opacity-50 cursor-pointer"
             >
               <RotateCw className={`w-3.5 h-3.5 ${isCheckingUpdate ? "animate-spin text-amber-400" : ""}`} />
-              <span>{isCheckingUpdate ? "Đang kiểm tra..." : "Check For Update"}</span>
+              <span>{isCheckingUpdate ? "Đang quét kho..." : "Check For Update"}</span>
             </button>
 
             <div className="flex items-center gap-2">
@@ -218,11 +232,17 @@ export const RepoSyncModal: React.FC<RepoSyncModalProps> = ({
               ) : (
                 <button
                   onClick={handleStart}
-                  disabled={activeAction === "start" || (isCompleted && currentPct >= 100)}
+                  disabled={activeAction === "start" || (isCompleted && currentPct >= 100 && outdatedFiles === 0)}
                   className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-black text-xs font-bold transition-all shadow-[0_0_12px_rgba(56,189,248,0.4)] disabled:opacity-50 cursor-pointer"
                 >
                   <Play className="w-3.5 h-3.5 fill-current" />
-                  <span>{currentPct >= 100 ? "Đã đầy đủ" : "Tải Toàn Bộ Kho"}</span>
+                  <span>
+                    {outdatedFiles > 0
+                      ? `Cập nhật ngay (${outdatedFiles} skin)`
+                      : currentPct >= 100
+                      ? "Đã đầy đủ"
+                      : "Tải Toàn Bộ Kho"}
+                  </span>
                 </button>
               )}
 
