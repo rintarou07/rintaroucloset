@@ -240,7 +240,7 @@ impl BulkDownloadManager {
             let local_path = paths.get_fantome_path(entry.champ_id, entry.target_id);
             if local_path.exists() {
                 if let Ok(meta) = fs::metadata(&local_path) {
-                    if meta.len() == entry.size && entry.size > 0 {
+                    if meta.len() > 0 {
                         cached_files += 1;
                     } else {
                         outdated_files += 1;
@@ -292,7 +292,7 @@ impl BulkDownloadManager {
             total_repo_files += 1;
             let local_path = paths.get_fantome_path(entry.champ_id, entry.target_id);
             let is_up_to_date = if local_path.exists() {
-                fs::metadata(&local_path).map(|m| m.len() == entry.size && entry.size > 0).unwrap_or(false)
+                fs::metadata(&local_path).map(|m| m.len() > 0).unwrap_or(false)
             } else {
                 false
             };

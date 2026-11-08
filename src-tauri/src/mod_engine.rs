@@ -471,24 +471,30 @@ impl ModEngine {
         let mut needs_download = !fantome_file.exists();
 
         if !needs_download {
-            // Check if cached file size matches repository manifest size for the current game patch
-            if let Some(expected_size) = crate::metadata::MetadataManager::get_manifest_size(req.skin_id, &paths.metadata_dir) {
-                if expected_size > 0 {
-                    if let Ok(meta) = fs::metadata(&fantome_file) {
-                        if meta.len() != expected_size {
-                            info!(
-                                "Cached fantome for skin {} is outdated ({} bytes != expected {} bytes). Redownloading for updated patch...",
-                                req.skin_id, meta.len(), expected_size
-                            );
-                            let _ = fs::remove_file(&fantome_file);
-                            let mod_extract_dir = paths.mods_dir.join(req.skin_id.to_string());
-                            if mod_extract_dir.exists() {
-                                let _ = fs::remove_dir_all(&mod_extract_dir);
-                            }
-                            needs_download = true;
-                        }
-                    }
+            // Validate cached archive is non-empty and a valid ZIP/Fantome archive
+            // (Both pointer .fantome skins and full repacked .fantome skins are supported natively)
+            let is_valid_archive = fs::metadata(&fantome_file)
+                .map(|m| m.len() > 0)
+                .unwrap_or(false)
+                && File::open(&fantome_file)
+                    .and_then(|f| {
+                        FantomeReader::new(f)
+                            .map(|_| ())
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
+                    })
+                    .is_ok();
+
+            if !is_valid_archive {
+                info!(
+                    "Cached fantome for skin {} is invalid or empty. Redownloading...",
+                    req.skin_id
+                );
+                let _ = fs::remove_file(&fantome_file);
+                let mod_extract_dir = paths.mods_dir.join(req.skin_id.to_string());
+                if mod_extract_dir.exists() {
+                    let _ = fs::remove_dir_all(&mod_extract_dir);
                 }
+                needs_download = true;
             }
         }
 

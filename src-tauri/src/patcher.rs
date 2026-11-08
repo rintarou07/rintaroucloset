@@ -81,6 +81,60 @@ impl PatcherManager {
         lock.clone()
     }
 
+    /// Writes a binary file safely on Windows even if an existing copy is mapped/locked by a running process.
+    fn write_binary_safe(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        let old_path = target.with_extension("old_bin");
+        let _ = std::fs::remove_file(&old_path);
+        match std::fs::write(target, bytes) {
+            Ok(()) => Ok(()),
+            Err(_) => {
+                if target.exists() {
+                    let _ = std::fs::rename(target, &old_path);
+                }
+                let res = std::fs::write(target, bytes);
+                let _ = std::fs::remove_file(&old_path);
+                res
+            }
+        }
+    }
+
+    /// Ensures `ltk_patcher_dll.dll` (`1.30.0`) has both host verification and pointer-skin (`verify::ah`)
+    /// bypass patches applied in memory.
+    pub fn ensure_dll_bytes_patched(buf: &mut [u8]) -> bool {
+        if buf.len() != 836_864 {
+            return false;
+        }
+        let mut modified = false;
+
+        // 1. Host verification bypass in verify_all_overlay_wads (0x14316: jne -> nop nop)
+        if buf[0x14316..0x14318] == [0x75, 0x55] {
+            buf[0x14316..0x14318].copy_from_slice(&[0x90, 0x90]);
+            modified = true;
+        }
+        // 2. Host verification bypass in lazy_verify_wad (0x1cf3b: je -> jmp)
+        if buf[0x1cf3b..0x1cf41] == [0x0f, 0x84, 0x8b, 0x03, 0x00, 0x00] {
+            buf[0x1cf3b..0x1cf41].copy_from_slice(&[0xe9, 0x8c, 0x03, 0x00, 0x00, 0x90]);
+            modified = true;
+        }
+        // 3. Pointer skin (verify::ah) bypass in verify_overlay_wad (0xf2e0: jne 0xf535 -> jmp 0xf535)
+        if buf[0xf2e0..0xf2e6] == [0x0f, 0x85, 0x4f, 0x02, 0x00, 0x00] {
+            buf[0xf2e0..0xf2e6].copy_from_slice(&[0xe9, 0x50, 0x02, 0x00, 0x00, 0x90]);
+            modified = true;
+        }
+        // 4. Restore opt_out_ah = 1 in verify_all_overlay_wads (0x6b30)
+        if buf[0x6b30..0x6b38] == [0xc6, 0x84, 0x24, 0x38, 0x03, 0x00, 0x00, 0x00] {
+            buf[0x6b37] = 0x01;
+            modified = true;
+        }
+        // 5. Restore opt_out_ah = 1 in lazy_verify_wad (0x1c0f7)
+        if buf[0x1c0f7..0x1c0ff] == [0xc6, 0x84, 0x24, 0xc8, 0x01, 0x00, 0x00, 0x00] {
+            buf[0x1c0fe] = 0x01;
+            modified = true;
+        }
+
+        modified
+    }
+
     /// Verifies that patcher host and hook DLL exist in the portable patcher directory.
     /// If missing, smaller, or outdated compared to the embedded binaries,
     /// automatically extracts the new embedded binaries or falls back to remote download.
@@ -96,7 +150,7 @@ impl PatcherManager {
                 .unwrap_or(true);
         if host_needs_extract {
             info!("Auto-extracting embedded ltk_patcher_host.exe ({} bytes) into {:?}", EMBEDDED_HOST_EXE.len(), host_exe);
-            if let Err(e) = std::fs::write(&host_exe, EMBEDDED_HOST_EXE) {
+            if let Err(e) = Self::write_binary_safe(&host_exe, EMBEDDED_HOST_EXE) {
                 warn!("Failed writing embedded host.exe: {}", e);
             }
         }
@@ -108,8 +162,16 @@ impl PatcherManager {
                 .unwrap_or(true);
         if dll_needs_extract {
             info!("Auto-extracting patched embedded ltk_patcher_dll.dll ({} bytes) into {:?}", EMBEDDED_HOOK_DLL.len(), hook_dll);
-            if let Err(e) = std::fs::write(&hook_dll, EMBEDDED_HOOK_DLL) {
+            if let Err(e) = Self::write_binary_safe(&hook_dll, EMBEDDED_HOOK_DLL) {
                 warn!("Failed writing embedded hook.dll: {}", e);
+            }
+        }
+
+        // 3. Self-heal: if hook_dll on disk is an unpatched 1.30.0 binary, patch it in-place
+        if let Ok(mut disk_bytes) = std::fs::read(&hook_dll) {
+            if Self::ensure_dll_bytes_patched(&mut disk_bytes) {
+                info!("Applied in-place verify::ah & host-verify patches to {:?}", hook_dll);
+                let _ = Self::write_binary_safe(&hook_dll, &disk_bytes);
             }
         }
 
@@ -123,7 +185,7 @@ impl PatcherManager {
                         if path.is_dir() {
                             let candidate_dll = path.join("ltk_patcher_dll.dll");
                             if candidate_dll.exists() {
-                                let _ = std::fs::write(&candidate_dll, EMBEDDED_HOOK_DLL);
+                                let _ = Self::write_binary_safe(&candidate_dll, EMBEDDED_HOOK_DLL);
                             }
                         }
                     }
@@ -156,7 +218,7 @@ impl PatcherManager {
 
         if !host_exe.exists() || std::fs::metadata(&host_exe).map(|m| m.len() != EMBEDDED_HOST_EXE.len() as u64).unwrap_or(true) {
             info!("Writing embedded ltk_patcher_host.exe...");
-            if std::fs::write(&host_exe, EMBEDDED_HOST_EXE).is_err() {
+            if Self::write_binary_safe(&host_exe, EMBEDDED_HOST_EXE).is_err() {
                 // Download fallback from official project repository releases
                 info!("Downloading ltk_patcher_host.exe fallback...");
                 if let Ok(client) = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).build() {
@@ -164,7 +226,7 @@ impl PatcherManager {
                     if let Ok(resp) = client.get(url).send().await {
                         if resp.status().is_success() {
                             if let Ok(bytes) = resp.bytes().await {
-                                let _ = std::fs::write(&host_exe, bytes);
+                                let _ = Self::write_binary_safe(&host_exe, &bytes);
                             }
                         }
                     }
@@ -174,7 +236,7 @@ impl PatcherManager {
 
         if !hook_dll.exists() || std::fs::read(&hook_dll).map(|b| b != EMBEDDED_HOOK_DLL).unwrap_or(true) {
             info!("Writing embedded ltk_patcher_dll.dll...");
-            if std::fs::write(&hook_dll, EMBEDDED_HOOK_DLL).is_err() {
+            if Self::write_binary_safe(&hook_dll, EMBEDDED_HOOK_DLL).is_err() {
                 // Download fallback from official project repository releases
                 info!("Downloading ltk_patcher_dll.dll fallback...");
                 if let Ok(client) = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).build() {
@@ -182,7 +244,9 @@ impl PatcherManager {
                     if let Ok(resp) = client.get(url).send().await {
                         if resp.status().is_success() {
                             if let Ok(bytes) = resp.bytes().await {
-                                let _ = std::fs::write(&hook_dll, bytes);
+                                let mut buf = bytes.to_vec();
+                                Self::ensure_dll_bytes_patched(&mut buf);
+                                let _ = Self::write_binary_safe(&hook_dll, &buf);
                             }
                         }
                     }
@@ -514,5 +578,35 @@ impl PatcherManager {
         }
 
         Ok(stopped_payload)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_embedded_dll_has_all_patches() {
+        assert_eq!(EMBEDDED_HOOK_DLL.len(), 836_864);
+        assert_eq!(&EMBEDDED_HOOK_DLL[0x14316..0x14318], &[0x90, 0x90]);
+        assert_eq!(
+            &EMBEDDED_HOOK_DLL[0x1cf3b..0x1cf41],
+            &[0xe9, 0x8c, 0x03, 0x00, 0x00, 0x90]
+        );
+        assert_eq!(
+            &EMBEDDED_HOOK_DLL[0xf2e0..0xf2e6],
+            &[0xe9, 0x50, 0x02, 0x00, 0x00, 0x90]
+        );
+        assert_eq!(
+            &EMBEDDED_HOOK_DLL[0x6b30..0x6b38],
+            &[0xc6, 0x84, 0x24, 0x38, 0x03, 0x00, 0x00, 0x01]
+        );
+        assert_eq!(
+            &EMBEDDED_HOOK_DLL[0x1c0f7..0x1c0ff],
+            &[0xc6, 0x84, 0x24, 0xc8, 0x01, 0x00, 0x00, 0x01]
+        );
+
+        let mut copy = EMBEDDED_HOOK_DLL.to_vec();
+        assert!(!PatcherManager::ensure_dll_bytes_patched(&mut copy));
     }
 }

@@ -1,17 +1,16 @@
 {
-  "version": "0.1.9",
+  "version": "0.2.0",
   "min_required_version": "0.1.0",
   "release_date": "2026-11-08",
-  "title": "Bản cập nhật Rintarou Closet v0.1.9 - Fix Toàn Diện Kho Skin 16.22 & Tránh Treo Hook",
+  "title": "Bản cập nhật Rintarou Closet v0.2.0 - Mở Khóa Skin Dùng Con Trỏ (Pointer Skins) Cho LMHT 16.22",
   "changelog": [
-    "Sửa lỗi quét kho skin: Lọc bỏ thư mục classic, đồng bộ chuẩn xác 9.136 trang phục LMHT 16.22",
-    "Tự động phát hiện và tải lại trang phục bản mới khi kích hoạt nếu phát hiện dung lượng không khớp bản vá",
-    "Khắc phục triệt để lỗi treo lặp vô tận SetWindowsHookEx (auto-retry giới hạn 3 lần với backoff thông minh)",
-    "Sửa lỗi ghi đè file trên Windows (atomic replace) khi cập nhật các skin cũ đã lưu về local",
-    "Tự động làm mới cache manifest.json và catalog_cache.json định kỳ thay vì lưu vĩnh viễn"
+    "Khôi phục hoàn toàn khả năng nạp các skin dùng con trỏ (pointer skins) trên core LTK 1.30.0 (bypass verify::ah / OPT_OUT_AH_V1)",
+    "Giữ nguyên kho skin .fantome dùng con trỏ đã tải sẵn trong bộ nhớ đệm mà không bắt buộc tải lại bản repack nặng",
+    "Tự động kiểm tra và vá trực tiếp (self-healing) cả 5 điểm bypass trong ltk_patcher_dll.dll ngay cả khi file đang bị khóa",
+    "Đồng bộ tự động DLL đã mở khóa sang cả Rintarou Closet và bộ nhớ đệm LTK Manager"
   ],
   "download_url": "https://raw.githubusercontent.com/rintarou07/rintaroucloset/main/releases/Rintarou-Closet.exe",
   "direct_exe_url": "https://raw.githubusercontent.com/rintarou07/rintaroucloset/main/releases/Rintarou-Closet.exe",
-  "patcher_version": "ltk_patcher-30-unlocked",
+  "patcher_version": "ltk_patcher-30-pointer-unlocked",
   "patcher_url": "https://raw.githubusercontent.com/rintarou07/rintaroucloset/main/releases/patcher/ltk_patcher_dll.dll"
 }

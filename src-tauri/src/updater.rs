@@ -5,7 +5,7 @@ use std::io::Write;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
-pub const CURRENT_APP_VERSION: &str = "0.1.9";
+pub const CURRENT_APP_VERSION: &str = "0.2.0";
 pub const GITHUB_REPO_URL: &str = "https://github.com/rintarou07/rintaroucloset";
 pub const UPDATE_MANIFEST_URL: &str =
     "https://raw.githubusercontent.com/rintarou07/rintaroucloset/main/version.json";
